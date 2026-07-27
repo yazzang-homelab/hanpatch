@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse to commit game data. The repository ships tooling only.
+blocked=$(git diff --cached --name-only --diff-filter=AM | grep -Ei \
+  '(^|/)(work|extracted|dist|build)/|\.(cia|cci|3ds|cxi|nds|iso|bcfnt|ttf|otf)$|(^|/)text_src\.json$|(^|/)manifest\.json$' )
+if [ -n "$blocked" ]; then
+  echo "pre-commit: refusing to commit game data / licensed fonts:" >&2
+  echo "$blocked" | sed 's/^/  /' >&2
+  echo "This repository ships tooling only. See README > Legal." >&2
+  exit 1
+fi

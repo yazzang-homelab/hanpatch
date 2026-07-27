@@ -1,0 +1,30 @@
+# --- game data: never commit ---------------------------------------------
+# ROMs and images
+*.cia
+*.cci
+*.3ds
+*.cxi
+*.nds
+*.iso
+*.bin
+# extracted containers and per-project working data
+extracted/
+work/
+build/
+dist/
+# a project's own config points at a ROM
+/hanpatch.json
+# fonts are licensed separately; bring your own
+fonts/
+*.ttf
+*.otf
+*.bcfnt
+# ------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.DS_Store

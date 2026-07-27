@@ -1,0 +1,171 @@
+---
+name: hanpatch
+description: Build a fan translation patch for a game ROM with structural consistency gates — extract text, machine-translate through free endpoints, enforce a glossary and text-box capacity, seal a manifest, verify with an independent multi-judge QA panel, inject, and prove the round trip. Use when asked to localise/한글패치 a game, or to audit an existing translation pipeline.
+---
+
+# hanpatch — gate-enforced game localisation
+
+## What this is for
+
+Producing a translation patch that is *provably* consistent, not one that looks
+fine in a spot check. The premise: machine translators are cheap and plentiful,
+and they are unreliable in ways that are individually invisible and collectively
+fatal — a name spelled three ways, a line that overflows its text box on the
+third page, a control tag silently dropped, a judge that rubber-stamps its own
+output. None of that is fixed by a better prompt. It is fixed by refusing to
+build until a machine can prove it did not happen.
+
+Use this skill when the task is "translate game X into language Y", when a
+translation exists but nobody can say whether it is correct, or when a
+localisation pipeline needs review.
+
+Do **not** reach for it to translate a handful of strings, or a document with no
+container, no layout budget, and no glossary. The ceremony only pays for itself
+across thousands of interdependent strings.
+
+## The non-negotiable rule
+
+**Consistency is enforced structurally, never by trusting a model.**
+
+Every claim the pipeline makes is re-derived from the shipped artifact. If a
+check cannot be automated, it is recorded as a known limitation instead of being
+asserted. A gate that can be skipped is not a gate.
+
+## Layers
+
+```
+config / profile   what this title is, where its files are, its markup grammar
+core               glossary, translation, layout, audit, manifest, QA gates
+                   — no knowledge of any container format
+adapter            extract / inject / verify for one title on one platform
+platform+format    CIA/NCCH/RomFS/BCFNT, archive and message readers
+```
+
+The core never reads a ROM. An adapter never decides wording — the test suite
+asserts this by rejecting any adapter that imports the wording modules. This is
+what makes a new title cheap: write an adapter and a profile, change nothing
+else.
+
+## Workflow
+
+```bash
+hanpatch init  --title "Game" --adapter my_game --profile profiles/my_game.json
+hanpatch extract                    # ROM -> work/text_src.json
+hanpatch fonts                      # target-script glyphs into the game's font
+hanpatch translate --family dialogue --workers 4
+hanpatch qa --judges 2 --workers 4  # independent judge panel, resumable
+hanpatch gates                      # all gates, seals a manifest digest
+hanpatch build                      # gates + inject -> patched ROM
+hanpatch verify                     # re-read the ROM, prove every string
+hanpatch book                       # bilingual script book (static site)
+```
+
+Translation and QA are long-running and resumable — shard files are `fcntl`
+locked, so run them under `setsid nohup` and poll the log. Everything else is
+minutes.
+
+## Gate order — this sequence is the safety argument
+
+| # | Gate | Rejects |
+|---|------|---------|
+| 1 | `glossary` | a proper noun rendered two ways; a UI label leaking into prose |
+| 2 | `capacity` | text exceeding the largest page that layout group ever renders |
+| 3 | `materialize` | rule-derived rows that do not survive their own validator |
+| 4 | `audit` | untranslated rows, tag damage, register drift, duplicate meanings |
+| 5 | `manifest` | nothing — it *seals* every shippable string into one digest |
+| 6 | `qagate` | any entry lacking N independent judge passes for that exact pair |
+
+Then the packer **re-runs the QA validation in-process** before writing a byte.
+The approval token is a convenience; the authority is the fresh revalidation.
+Editing the manifest and the token together still fails.
+
+## Ideas worth stealing even if you never run this
+
+**Capacity comes from the shipped text, not a guess.** The widest page the
+original ever renders in a layout group is the proven bound. Group by
+`family/key-shape` with digits folded, so `system/treasure` is bounded by the
+one line it renders instead of borrowing its family's maximum.
+
+**The glossary is scoped.** Short polysemous labels (`Dead`, `Key`, `Cure`) are
+mandatory in the families that render them as UI labels and *forbidden* as
+mandates inside narrative prose, where they are ordinary words.
+
+**Two judges minimum, and a producer may not judge its own output.** One judge
+produces correlated false negatives — a reviewer sample found 4 real defects in
+5 strings a single judge had passed. Judge verdicts are structured
+(`pass|defect|policy`), never keyword-sniffed from prose, and an invalid or
+missing disposition is *dropped* so the row stays pending and rotates providers,
+rather than being synthesised into a pass.
+
+**Waivers are hash-bound.** A waiver keys on `sha1(source + '\0' + shipped
+text)`. Edit either side and the waiver goes stale and blocks the build. A
+waiver needs a category and a real reason.
+
+**Glyph authority is the built font.** A character is renderable because it
+exists in the font that ships, verified by reading the packed font back out of
+the ROM — not because it is in some Unicode range.
+
+**Measure the format before writing it.** The 3DS font sheets are RGBA4444
+where `A` is ink coverage and `RGB` is a shading mask the engine multiplies with
+the text colour. The naive `255 - coverage` inverse yields flat-black glyphs with
+a bright rim. The correct LUT was *measured off the shipped font*. Guessing a
+binary format's semantics costs a whole rebuild cycle.
+
+## Adding a title
+
+1. **Find the text.** Unpack the ROM; look for a message archive. Round-trip it
+   byte-for-byte before touching anything — if repacking the untouched original
+   does not reproduce the input exactly, the reader is wrong.
+2. **Write the profile** (`profiles/<title>.json`): markup grammar, name-key
+   patterns, forced terms, UI-only scoping, per-family width budgets, font
+   paths, register rules.
+3. **Write the adapter** (`hanpatch/adapters/<title>.py`): `extract`, `inject`,
+   `verify`. Subclass `Adapter`, decorate with `@register('name')`.
+4. **Prove the identity rebuild.** Build with an empty translation and diff
+   against the original ROM. Bit-exact or the adapter is not done.
+5. Then translate.
+
+For a non-3DS platform, add `hanpatch/platforms/<name>/` with the container
+crypto and filesystem. The core does not change.
+
+## Localisation policy is a decision, not a default
+
+Record it in the profile and enforce it. The reference title uses: **prose
+follows the English release; item/spell/weapon names transliterate the Japanese
+original; character names follow English.** That mixture is deliberate — the
+English prose is the better read, but the Japanese item names are what players
+recognise. Whatever you choose, it must be mechanically checkable, or it is a
+preference rather than a policy.
+
+## When a gate fails
+
+Fix the translation. Do not widen the gate, do not add a waiver to make a red
+line green, do not lower the judge count. A waiver is for a *defensible policy
+disagreement* with a written reason — not for a defect you would rather not
+address.
+
+## Honest limitations
+
+State these rather than implying coverage:
+
+- No gate substitutes for playing the game. Layout is verified against font
+  metrics, not against a running renderer.
+- Swapping the text of two strings inside one control span is not structurally
+  detectable.
+- JSON artifacts are integrity-checked, not signed. The threat model is
+  accidental corruption and model error — not a malicious local editor.
+- Judge/producer separation is best-effort for rows translated before provenance
+  logging existed.
+
+## Legal
+
+Ship the tooling and your own translation. Never redistribute the game, its
+extracted text, or a pre-patched ROM. Fonts need a redistributable licence —
+the reference build uses NeoDunggeunmo (OFL-1.1) and cites it.
+
+## Reference
+
+- `references/adapters.md` — the adapter contract in detail
+- `references/qa-panel.md` — judge panel, dispositions, waivers
+- `references/3ds.md` — CIA/NCCH/RomFS/BCFNT notes and pitfalls
+- `references/scriptbook.md` — generating a bilingual script book from the seal

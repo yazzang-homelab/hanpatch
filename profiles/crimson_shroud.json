@@ -1,0 +1,238 @@
+{
+ "_comment": "Crimson Shroud (3DS) Korean reference profile. Localisation policy: prose follows the English release; item/spell/weapon names transliterate the Japanese original; character names follow English. \"terms\" is a proper-noun and fixed-UI naming table — it is deliberately not the game script, which this repository never ships.",
+ "budget": {
+  "battle": 344,
+  "default": 384,
+  "dialogue": 392,
+  "ending": 320,
+  "stage1": 348
+ },
+ "capacity": {
+  "battle": 2,
+  "dialogue": 10,
+  "ending": 2,
+  "stage1": 7,
+  "system": 2
+ },
+ "font_out": [
+  "work/ko/font_text.bcfnt",
+  "work/ko/font_system.bcfnt"
+ ],
+ "font_px": {
+  "font_system": 14,
+  "font_text": 16
+ },
+ "font_src": [
+  "extracted/fa/font/en/font_text.bcfnt",
+  "extracted/fa/font/en/font_system.bcfnt"
+ ],
+ "hard_break": [
+  "<br>"
+ ],
+ "hard_families": [
+  "region"
+ ],
+ "latin_allow": [
+  "HP",
+  "MP",
+  "AI",
+  "II",
+  "III",
+  "IV",
+  "V",
+  "TRPG",
+  "SD",
+  "WT",
+  "ATK",
+  "DEF",
+  "EXP",
+  "LV",
+  "OK"
+ ],
+ "movable_tags": [
+  "<damage>",
+  "<enemy>",
+  "<gain>",
+  "<item>",
+  "<magic>",
+  "<num1>",
+  "<player>",
+  "<status>",
+  "<tech>",
+  "<word2>",
+  "<word>"
+ ],
+ "name_keys": [
+  [
+   "unit",
+   "unit_name_\\d+"
+  ],
+  [
+   "common",
+   "enemy_[A-Za-z]+_00"
+  ],
+  [
+   "common",
+   "item_\\d+"
+  ],
+  [
+   "region",
+   "(region|stage)_\\w+"
+  ],
+  [
+   "magic",
+   "effect_\\d+"
+  ],
+  [
+   "item",
+   "item_\\d+"
+  ],
+  [
+   "arms",
+   "arms_\\d+"
+  ],
+  [
+   "battle",
+   "btl_cond_\\d+"
+  ],
+  [
+   "title",
+   "title_\\d+"
+  ]
+ ],
+ "page_break": [
+  "<page>"
+ ],
+ "skip_key_patterns": [
+  "^stage1$",
+  "^test_",
+  "_help_dummy$"
+ ],
+ "skip_value_patterns": [
+  "^CAUTION : please report a bug",
+  "^not used$",
+  "^abcdedf7$"
+ ],
+ "style": "",
+ "tag_pattern": "<[^>\\n]*>",
+ "terms": {
+  "AMBUSH": "매복",
+  "Andolay": "안돌레이",
+  "Aphmal": "아프말",
+  "Chaser": "체이서",
+  "Chasers": "체이서",
+  "Chosen of the Solis": "솔리스의 선택받은 자",
+  "Circle Pad": "슬라이드 패드",
+  "Conclave": "콘클라베",
+  "Crimson Shroud": "크림슨 슈라우드",
+  "Dark Lands": "암흑 대지",
+  "Defense of Heresy": "이단의 변호",
+  "Flint": "플린트",
+  "Fog of War": "표묘전",
+  "Frea": "프레아",
+  "Gatherers": "개더러",
+  "Gerseym": "게르세임",
+  "Giauque": "지오크",
+  "Haram": "하람",
+  "Heresy": "이단",
+  "Lippi": "리피",
+  "Malora": "말로라",
+  "Mashriq": "마슈리크",
+  "Melding": "융합",
+  "Nephelia": "네펠리아",
+  "Nolis": "놀리스",
+  "Qish": "키슈",
+  "Rahab": "라하브",
+  "Ruahnan": "루아난",
+  "STYLUS": "터치펜",
+  "SURPRISE ATTACK": "기습 공격",
+  "Scipione": "스키피오네",
+  "Senate": "원로원",
+  "Sinners Requiem": "죄인들의 진혼가",
+  "Solis": "솔리스",
+  "Spellbook": "주문서",
+  "Tieffle": "티플",
+  "Touch Screen": "터치 스크린",
+  "dark spirit": "암흑 정령",
+  "dark spirits": "암흑 정령",
+  "darkspirit": "암흑 정령",
+  "darkstone": "마석",
+  "darkstones": "마석",
+  "gift": "기프트",
+  "gifts": "기프트",
+  "gnome": "노움",
+  "gnomes": "노움",
+  "paling": "결계",
+  "palings": "결계",
+  "spellbook": "주문서",
+  "stylus": "터치펜",
+  "the Dark": "암흑",
+  "wyrm": "와이엄",
+  "wyrms": "와이엄"
+ },
+ "ttf": "fonts/neodgm.ttf",
+ "ui_only_families": [
+  "arms",
+  "arms_help",
+  "battle",
+  "common",
+  "item",
+  "magic",
+  "system",
+  "unit"
+ ],
+ "ui_only_terms": [
+  "Asleep",
+  "Avalanche",
+  "Befuddle",
+  "Brandish",
+  "Cleanse",
+  "Concentrate",
+  "Conversion",
+  "Cure",
+  "Dazzle",
+  "Dead",
+  "Despair",
+  "Detonate",
+  "Detoxify",
+  "Dispel",
+  "Embolden",
+  "Ensnare",
+  "Envenomed",
+  "Focus",
+  "Foresight",
+  "Fortify",
+  "Gravity",
+  "Hastened",
+  "Heal",
+  "Heroism",
+  "Hex",
+  "Inspire",
+  "Invigorate",
+  "Jinx",
+  "Key",
+  "Meditate",
+  "Paralyzed",
+  "Petrified",
+  "Poisoned",
+  "Protect",
+  "Raise",
+  "Regenerating HP",
+  "Renew",
+  "Repose",
+  "Resurrect",
+  "Reveal",
+  "Revealed",
+  "Rouse",
+  "Silenced",
+  "Slowed",
+  "Sunder",
+  "Swindle",
+  "Tempest",
+  "Terrified",
+  "Tornado",
+  "Unraiseable",
+  "Vocalize",
+  "Wither"
+ ]
+}

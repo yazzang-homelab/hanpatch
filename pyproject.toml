@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hanpatch"
+version = "1.0.0"
+description = "Gate-enforced game localisation pipeline (3DS reference implementation)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["pycryptodome>=3.15", "pillow>=9.0"]
+
+[project.scripts]
+hanpatch = "hanpatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hanpatch*"]
