@@ -11,6 +11,11 @@
     hanpatch verify
     hanpatch book    [--out DIR]
     hanpatch all
+
+    hanpatch keys                        show loaded key material
+    hanpatch release --out patch.hpk     bundle the translation for distribution
+    hanpatch apply patch.hpk --rom ROM   rebuild someone else's copy
+    hanpatch delta --old A --new B --out P   raw binary delta (any file pair)
 """
 import argparse
 import json
@@ -44,6 +49,16 @@ def cmd_info(args):
     _p(config.describe())
     from hanpatch import adapter
     _p(f'adapters {", ".join(adapter.available())}')
+    rom = config.p(config.cfg().get('rom', 'game.cia'))
+    if os.path.exists(rom):
+        try:
+            from hanpatch.platforms import threeds
+            kind = threeds.detect(rom)
+            _p(f'rom      {os.path.basename(rom)} [{kind}]')
+            n = threeds.open_ncch(rom)
+            _p(f'         {n.describe()}')
+        except Exception as e:
+            _p(f'rom      {os.path.basename(rom)} — {e}')
     src = config.src_path()
     if os.path.exists(src):
         d = json.load(open(src))
@@ -140,6 +155,62 @@ def cmd_book(args):
     return scriptbook.main(args.out) or 0
 
 
+def cmd_keys(args):
+    from hanpatch.platforms.threeds import keys as keysmod
+    ks = keysmod.KeyStore(project=config.root())
+    _p('key material')
+    _p(ks.describe())
+    if not ks.sources:
+        _p('')
+        _p('hanpatch ships no keys. Put boot9.bin, keys.txt or seeddb.bin in')
+        _p(f'  {os.path.join(config.root(), "keys")}/  or  ~/.hanpatch/keys/')
+        _p('or set HANPATCH_KEYS to a path. Titles using only crypto method 0')
+        _p('need nothing; encrypted retail dumps need slot 0x25/0x18/0x1B, and')
+        _p('title-key encrypted CIAs need slot 0x3D plus a common key.')
+    return 0
+
+
+def cmd_release(args):
+    from hanpatch import release
+    info = release.create(out=args.out, rom=args.rom, built=args.built,
+                          notes=args.notes)
+    _p(f"{info['bundle']}  {info['size']} bytes")
+    _p(f"  {info['entries']} strings, digest {info['digest'][:16]}")
+    _p(f"  input  {info['source_sha256']}")
+    _p(f"  output {info['output_sha256']}")
+    return 0
+
+
+def cmd_apply(args):
+    from hanpatch import release
+    if args.info:
+        import json as _j
+        _p(_j.dumps(release.inspect(args.bundle), indent=1, ensure_ascii=False))
+        return 0
+    if not args.rom:
+        _p('--rom is required')
+        return 2
+    r = release.apply(args.bundle, args.rom, out=args.out, force=args.force)
+    return 0 if r['reproduced'] or args.force else 1
+
+
+def cmd_delta(args):
+    from hanpatch import delta
+    if args.apply:
+        r = delta.apply(args.old, args.patch, args.out)
+        _p(f"{args.out}  {r['size']} bytes")
+        return 0
+    r = delta.create(args.old, args.new, args.out, backend=args.backend)
+    _p(f"{args.out}  {r['size']} bytes  ({r['ratio'] * 100:.1f}% of the target, "
+       f"backend {r['backend']})")
+    if r['ratio'] > 0.5:
+        _p('note: this delta is most of the file. Encrypted containers defeat '
+           'binary diffing — use `hanpatch release` instead.')
+    if args.applier:
+        _p(delta.write_applier(args.applier))
+    return 0
+
+
 def cmd_all(args):
     for fn, a in ((cmd_fonts, args), (cmd_gates, args), (cmd_build, args),
                   (cmd_verify, args)):
@@ -208,6 +279,35 @@ def main(argv=None):
     s = sub.add_parser('book', help='render the bilingual script book')
     s.add_argument('--out')
     s.set_defaults(fn=cmd_book)
+
+    s = sub.add_parser('keys', help='show loaded key material')
+    s.set_defaults(fn=cmd_keys)
+
+    s = sub.add_parser('release', help='bundle the translation for distribution')
+    s.add_argument('--out')
+    s.add_argument('--rom')
+    s.add_argument('--built', help='the patched ROM whose hash to record')
+    s.add_argument('--notes', default='')
+    s.set_defaults(fn=cmd_release)
+
+    s = sub.add_parser('apply', help='apply a release bundle to your own ROM')
+    s.add_argument('bundle')
+    s.add_argument('--rom')
+    s.add_argument('--out')
+    s.add_argument('--force', action='store_true',
+                   help='continue when the input hash does not match')
+    s.add_argument('--info', action='store_true', help='print bundle metadata')
+    s.set_defaults(fn=cmd_apply)
+
+    s = sub.add_parser('delta', help='raw binary delta between two files')
+    s.add_argument('--old', required=True)
+    s.add_argument('--new')
+    s.add_argument('--patch')
+    s.add_argument('--out', required=True)
+    s.add_argument('--backend', default='auto', choices=['auto', 'xdelta', 'hpd'])
+    s.add_argument('--apply', action='store_true')
+    s.add_argument('--applier', help='also write a standalone applier script')
+    s.set_defaults(fn=cmd_delta)
 
     s = sub.add_parser('all', help='fonts + gates + build + verify')
     s.add_argument('--rom')

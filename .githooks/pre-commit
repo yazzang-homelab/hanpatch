@@ -1,10 +1,16 @@
 #!/bin/sh
-# Refuse to commit game data. The repository ships tooling only.
+# Keep game data out of this repository by accident. This is a convenience
+# default, not a policy: in your own repository set allow_game_data=true in
+# hanpatch.json, or set HANPATCH_ALLOW_GAME_DATA=1, or do not install the hook
+# (git config --unset core.hooksPath).
+if [ "$HANPATCH_ALLOW_GAME_DATA" = "1" ]; then exit 0; fi
+if [ -f hanpatch.json ] && grep -q '"allow_game_data"[[:space:]]*:[[:space:]]*true' hanpatch.json; then exit 0; fi
 blocked=$(git diff --cached --name-only --diff-filter=AM | grep -Ei \
-  '(^|/)(work|extracted|dist|build)/|\.(cia|cci|3ds|cxi|nds|iso|bcfnt|ttf|otf)$|(^|/)text_src\.json$|(^|/)manifest\.json$' )
+  '(^|/)(work|extracted|dist|build|keys)/|\.(cia|cci|3ds|cxi|nds|iso|bcfnt|ttf|otf)$|(^|/)(text_src|manifest)\.json$|(^|/)(boot9|seeddb|keys)\.(bin|txt)$' )
 if [ -n "$blocked" ]; then
-  echo "pre-commit: refusing to commit game data / licensed fonts:" >&2
+  echo "pre-commit: these look like game data, key material or licensed fonts:" >&2
   echo "$blocked" | sed 's/^/  /' >&2
-  echo "This repository ships tooling only. See README > Legal." >&2
+  echo "" >&2
+  echo "Bypass: HANPATCH_ALLOW_GAME_DATA=1 git commit ...   (or see NOTICE.md)" >&2
   exit 1
 fi

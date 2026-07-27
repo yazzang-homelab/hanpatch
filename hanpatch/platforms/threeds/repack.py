@@ -1,4 +1,10 @@
-"""Rebuild the Crimson Shroud CIA with a patched RomFS."""
+"""Rebuild a CIA (or a bare NCCH partition) around a patched RomFS.
+
+The RomFS is re-encrypted with the NCCH *secondary* key, which differs from the
+primary key under crypto methods 1/10/11. Every size and hash that refers to the
+content is recomputed: the NCCH header, the TMD content chunk and its info
+records, the TMD body hash, and the CIA header's content size.
+"""
 import hashlib
 import os
 import struct
@@ -71,10 +77,14 @@ def encrypt_section(key, partition_id, section, plaintext_stream, out, total,
         written += len(b)
 
 
-def rebuild(cia_path, new_romfs, out_path):
-    cia = Cia(cia_path)
-    main = cia.chunks[0]
-    n = ncchmod.NCCH(cia_path, main['offset'])
+def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
+    """Write one NCCH partition with `new_romfs` swapped in.
+
+    Returns (size, sha256). Everything between the header and the RomFS is
+    copied verbatim in its still-encrypted form, so the exefs and exheader are
+    untouched and need no key at all.
+    """
+    n = ncchmod.NCCH(src_path, base, keystore=keystore)
     header = bytearray(n.h)
     romfs_off_bytes = n.romfs_off * 0x200
     romfs_size = os.path.getsize(new_romfs)
@@ -89,34 +99,54 @@ def rebuild(cia_path, new_romfs, out_path):
         first = rf.read(0x200)
     header[0x1E0:0x200] = hashlib.sha256(first).digest()
 
-    tmp = out_path + '.content0'
-    with open(tmp, 'wb') as o:
+    src = open(src_path, 'rb')
+    with open(out_path, 'wb') as o:
         o.write(bytes(header))
-        # everything between header and romfs is copied verbatim (still encrypted)
-        cia.f.seek(main['offset'] + 0x200)
+        # header..romfs is copied verbatim, still encrypted, so no key is needed
+        src.seek(base + 0x200)
         left = romfs_off_bytes - 0x200
         while left:
-            b = cia.f.read(min(CHUNK, left))
+            b = src.read(min(CHUNK, left))
             o.write(b)
             left -= len(b)
         with open(new_romfs, 'rb') as rf:
-            encrypt_section(n.key, n.partition_id, 3, rf, o, romfs_pad,
+            encrypt_section(n.secondary, n.partition_id, 3, rf, o, romfs_pad,
                             no_crypto=n.no_crypto)
-    assert os.path.getsize(tmp) == new_content_size, (os.path.getsize(tmp), new_content_size)
-
-    # hash of new content
+    got = os.path.getsize(out_path)
+    if got != new_content_size:
+        raise ValueError(f'rebuilt content is {got:#x}, expected '
+                         f'{new_content_size:#x}')
     h = hashlib.sha256()
-    with open(tmp, 'rb') as cf:
+    with open(out_path, 'rb') as cf:
         while True:
             b = cf.read(CHUNK)
             if not b:
                 break
             h.update(b)
-    main_hash = h.digest()
+    return new_content_size, h.digest()
+
+
+def rebuild(cia_path, new_romfs, out_path, keystore=None):
+    cia = Cia(cia_path)
+    main = cia.chunks[0]
+    from hanpatch.platforms.threeds import cia as ciamod
+    plain, base, temp = ciamod.prepare_content(
+        cia, main['idx'], workdir=os.path.dirname(os.path.abspath(out_path)),
+        keystore=keystore)
+    tmp = out_path + '.content0'
+    new_content_size, main_hash = rebuild_ncch(plain, base, new_romfs, tmp,
+                                               keystore=keystore)
+    if temp and os.path.exists(plain):
+        os.remove(plain)
 
     body = cia.tmd_body
     struct.pack_into('>Q', body, 0x9C4 + 8, new_content_size)
     body[0x9C4 + 16:0x9C4 + 48] = main_hash
+    # The rebuilt content is written in the clear, so the title-key encryption
+    # flag must come off or an installer will try to decrypt plaintext.
+    if temp:
+        ctype, = struct.unpack('>H', body[0x9C4 + 6:0x9C4 + 8])
+        struct.pack_into('>H', body, 0x9C4 + 6, ctype & ~ciamod.TYPE_ENCRYPTED)
     # content info records: recompute each record's sha over its chunk range
     for i in range(64):
         o = 0xC4 + i * 0x24

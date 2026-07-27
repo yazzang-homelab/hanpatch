@@ -157,11 +157,51 @@ State these rather than implying coverage:
 - Judge/producer separation is best-effort for rows translated before provenance
   logging existed.
 
+## Containers and keys
+
+Accepts CIA, CCI/`.3ds` cartridge dumps, and bare NCCH. Handles every documented
+NCCH crypto method (0, 1, 10, 11), fixed/zero key, seed crypto, and title-key
+encrypted CIA content.
+
+**Key material is the operator's.** Nothing is bundled. Point `HANPATCH_KEYS` at
+a directory with `boot9.bin`, `keys.txt` or `seeddb.bin`, or drop them in
+`<project>/keys/`, and run `hanpatch keys` to see which slots resolved. Crypto
+method 0 needs nothing at all.
+
+Two habits worth copying: the bootROM keyblob is located by **searching for the
+one KeyX that is public knowledge** and indexing off it, so no hardcoded file
+offset can silently drift; and every derived key is **validated by decrypting a
+section and checking its magic**, so a wrong slot fails loudly rather than
+producing plausible garbage.
+
+## Distributing the result
+
+Ship a **release bundle**, not a ROM and not a binary delta:
+
+```bash
+hanpatch release --out MyPatch.hpk      # manifest + fonts + profile
+hanpatch apply MyPatch.hpk --rom their.cia
+```
+
+Because the pipeline is deterministic, the recipient's rebuild is byte-identical
+to yours, and the bundle records both hashes so it can prove it. On the reference
+title that is 340 KB reproducing a 249 MB ROM in four seconds.
+
+Do not reach for a binary delta on an encrypted container. CTR keystreams are
+position-dependent, so one shifted byte kills every downstream match — both
+xdelta3 and a block differ come out at ~82% of the full ROM, which is not a patch,
+it is the game.
+
 ## Legal
 
-Ship the tooling and your own translation. Never redistribute the game, its
-extracted text, or a pre-patched ROM. Fonts need a redistributable licence —
-the reference build uses NeoDunggeunmo (OFL-1.1) and cites it.
+**The operator decides what is lawful for them. Do not make that call for them,
+and do not withhold a working capability as a guess about it.**
+
+Ship tooling and your own translation. Do not redistribute someone else's game,
+extracted text, key material, or licensed fonts — not as a legal judgement, but
+because none of it is yours to hand out. Copyright and anti-circumvention law
+varies by jurisdiction and is unsettled in several; say so and move on rather
+than pretending to advise.
 
 ## Related
 

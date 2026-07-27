@@ -1,10 +1,55 @@
 # 3DS container notes
 
-## CIA / NCCH
+## Containers
 
-eShop CIA contents are encrypted with the fixed system key (crypto method 0),
-which needs no `boot9`. Read the TMD content chunks for offsets, sizes, and
-declared SHA-256 hashes.
+Three shapes, all with the magic at +0x100: `NCSD` is a CCI/`.3ds` cartridge
+dump with an 8-entry partition table; `NCCH` is a bare partition; a CIA has a
+header, cert, ticket, TMD, then contents. Detect, do not assume from the
+extension.
+
+## Two layers of encryption
+
+Do not conflate them.
+
+1. **Title-key encryption** wraps whole CIA contents in AES-CBC with IV = the
+   content index. The title key comes from the ticket, wrapped with a common key
+   (slot 0x3D KeyX + one of several common KeyY values). The per-content type
+   flag bit 0x1 says whether it is applied. Files already processed by a tool
+   have it off.
+2. **NCCH encryption** is AES-CTR per section, with an IV built from the
+   partition id and the section number.
+
+A file can have both, one, or neither. Probe rather than believe the flags: if
+the first 0x200 bytes already contain `NCCH` at +0x100, no title-key layer is
+present regardless of what the TMD says.
+
+## NCCH keys
+
+`flags[7]` bit 0x04 means plaintext, bit 0x01 means fixed key (zero key for
+normal titles, the fixed system key for system ones), bit 0x20 means seed crypto
+(KeyY becomes `sha256(original KeyY || seed)[:16]`, seed from `seeddb.bin`).
+
+`flags[3]` selects the secondary key slot: 0x00→0x2C, 0x01→0x25, 0x0A→0x18,
+0x0B→0x1B. Under any secondary method the **exheader, the exefs header, and
+icon/banner/logo stay on the primary 0x2C key** while exefs file data and the
+RomFS use the secondary. Get that split wrong and the content decrypts *almost*
+correctly, which is far worse than failing.
+
+The scrambler is `rol((rol(KeyX, 2) ^ KeyY) + C, 87)` with **every operation mod
+2^128**. That addition carries past bit 127 for about half of all KeyY values; if
+you rotate the unmasked sum, the carry folds back in at bit (128 - 87) and
+distinct KeyY values collapse onto the same key. This was a real bug in this
+codebase, caught by a test that only asserted "two different KeyY values give two
+different keys".
+
+Only slot 0x2C's KeyX is public. Everything else comes from the operator's own
+hardware. Locate a supplied bootROM's keyblob by **searching for the public 0x2C
+KeyX** and indexing off it rather than hardcoding an offset, and **validate every
+derived key** by decrypting a section and checking its magic.
+
+## CIA specifics
+
+Read the TMD content chunks for offsets, sizes, and declared SHA-256 hashes.
 
 Rebuilding a content requires fixing, in order:
 
@@ -50,6 +95,13 @@ At an 18×19 cell, an antialiased gothic hangul syllable becomes a grey blob —
 there are not enough pixels for the strokes. A 1-bit pixel face thresholded at
 around 110 stays crisp. Build both, render a preview strip, and look at it at
 1× before deciding.
+
+## Rebuilding a CCI
+
+Partition offsets and lengths are in media units (0x200). A rebuilt partition 0
+that changed size means every later partition moves, the table is rewritten, and
+the declared media size grows to the next card size. Pad partitions with 0xFF,
+which is what a real card image uses.
 
 ## Verification worth doing
 

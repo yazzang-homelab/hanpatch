@@ -1,4 +1,7 @@
-# --- game data: never commit ---------------------------------------------
+# --- game data and key material -----------------------------------------
+# A convenience default for THIS repository. Your own project may legitimately
+# want these tracked: set "allow_game_data": true in hanpatch.json and drop
+# whatever you want from this list. See NOTICE.md.
 # ROMs and images
 *.cia
 *.cci
@@ -14,6 +17,14 @@ build/
 dist/
 # a project's own config points at a ROM
 /hanpatch.json
+# key material: yours, from your own hardware. never ours to ship.
+keys/
+boot9*.bin
+seeddb.bin
+keys.txt
+aes_keys.txt
+encTitleKeys.bin
+*.dec
 # fonts are licensed separately; bring your own
 fonts/
 *.ttf

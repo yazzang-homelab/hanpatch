@@ -1,0 +1,195 @@
+"""Release bundles — the distributable form of a translation.
+
+A binary delta is the wrong shape for an encrypted container. The 3DS encrypts
+RomFS in CTR mode, where the keystream depends on the byte offset, so shifting
+file data by one byte changes every ciphertext byte after it. Measured on the
+reference title, both a block delta and xdelta3 come out at ~82% of the full ROM:
+useless as a patch, and it *is* the game.
+
+What actually changes is the text and the fonts. A bundle carries exactly that —
+the sealed manifest, the built fonts, and the title profile — and the recipient
+rebuilds against their own copy. Because the pipeline is deterministic, the
+result is byte-identical to the author's build, which the bundle asserts by
+recording both hashes.
+
+    hanpatch release --out mypatch.hpk
+    hanpatch apply mypatch.hpk --rom /path/to/their.cia
+
+Bundle contents:
+
+    bundle.json        title, adapter, target, expected input/output sha256
+    manifest.json      the sealed text and its digest
+    profile.json       markup grammar, terms, budgets, register
+    fonts/*.bcfnt      the built target-language fonts
+    README.txt         what this is and how to apply it
+"""
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import zipfile
+
+from hanpatch import config, manifest
+
+FORMAT = 1
+
+
+def _sha(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        while True:
+            b = f.read(1 << 22)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+README = """{title} — {target} translation patch
+{rule}
+
+This bundle contains the translation, not the game. Applying it rebuilds your
+own copy of the ROM with the translated text and fonts.
+
+    pip install hanpatch
+    hanpatch apply "{bundle}" --rom /path/to/your/rom{ext}
+
+Expected input   sha256 {src}
+Resulting output sha256 {dst}
+
+If your ROM's hash differs, it is a different dump, region or revision. The
+patch will refuse to claim success; use --force to attempt it anyway and check
+the result yourself.
+
+Contents: {entries} translated strings, manifest digest {digest}.
+
+You are responsible for owning the game you patch and for complying with the
+law where you live.
+"""
+
+
+def create(out=None, rom=None, built=None, notes=None):
+    """Write a release bundle from the current project state."""
+    cfg = config.cfg()
+    doc = manifest.load()
+    rom = rom or config.p(cfg.get('rom', 'game.cia'))
+    built = built or config.dist(f"{cfg['title']} ({config.target()}).cia")
+    out = out or config.dist(f"{cfg['title']} ({config.target()}).hpk")
+
+    approved = config.out('manifest.approved')
+    if not os.path.exists(approved):
+        raise SystemExit('refusing to release: the manifest was never approved '
+                         'by the QA gate. Run `hanpatch gates` first.')
+    if json.load(open(approved)).get('digest') != doc['digest']:
+        raise SystemExit('refusing to release: the manifest changed after the '
+                         'QA gate approved it.')
+
+    info = {
+        'format': FORMAT,
+        'title': cfg['title'],
+        'platform': cfg.get('platform'),
+        'adapter': cfg.get('adapter'),
+        'target': config.target(),
+        'entries': len(doc['entries']),
+        'digest': doc['digest'],
+        'source_sha256': _sha(rom) if os.path.exists(rom) else None,
+        'output_sha256': _sha(built) if os.path.exists(built) else None,
+        'notes': notes or '',
+    }
+
+    fonts = [config.p(x) for x in config.prof('font_out')]
+    ext = os.path.splitext(rom)[1] or '.cia'
+    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        z.writestr('bundle.json', json.dumps(info, indent=1, ensure_ascii=False))
+        z.writestr('manifest.json', json.dumps(doc, ensure_ascii=False))
+        z.writestr('profile.json', json.dumps(config.profile(), indent=1,
+                                              ensure_ascii=False))
+        for f in fonts:
+            if os.path.exists(f):
+                z.write(f, f'fonts/{os.path.basename(f)}')
+        z.writestr('README.txt', README.format(
+            title=cfg['title'], target=config.lang_name(),
+            rule='=' * 60, bundle=os.path.basename(out), ext=ext,
+            src=info['source_sha256'] or '(unknown)',
+            dst=info['output_sha256'] or '(unknown)',
+            entries=info['entries'], digest=info['digest'][:16]))
+    info['bundle'] = out
+    info['size'] = os.path.getsize(out)
+    return info
+
+
+def inspect(bundle):
+    with zipfile.ZipFile(bundle) as z:
+        return json.loads(z.read('bundle.json'))
+
+
+def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
+    """Rebuild `rom` with the bundle's translation. Returns a report.
+
+    The recipient needs the game and this tool; the bundle supplies the text.
+    Nothing here trusts the bundle blindly: the input hash is checked before
+    work starts and the output hash after it finishes.
+    """
+    from hanpatch import adapter
+    info = inspect(bundle)
+    if info.get('format') != FORMAT:
+        raise SystemExit(f'unsupported bundle format {info.get("format")}')
+
+    got = _sha(rom)
+    if info.get('source_sha256') and got != info['source_sha256']:
+        msg = (f'input mismatch\n  bundle expects {info["source_sha256"]}\n'
+               f'  your file is   {got}')
+        if not force:
+            raise SystemExit(msg + '\nDifferent dump, region or revision. '
+                                   'Pass --force to try anyway.')
+        if not quiet:
+            print(msg + '\n--force given; continuing, verify the result yourself')
+
+    tmp = workdir or tempfile.mkdtemp(prefix='hanpatch-apply-')
+    os.makedirs(tmp, exist_ok=True)
+    with zipfile.ZipFile(bundle) as z:
+        z.extractall(tmp)
+    profile_path = os.path.join(tmp, 'profile.json')
+
+    # a throwaway project rooted at the temp dir, using the bundled profile
+    proj = {'title': info['title'], 'platform': info['platform'],
+            'adapter': info['adapter'], 'target': info['target'],
+            'profile': 'profile.json', 'rom': os.path.abspath(rom)}
+    json.dump(proj, open(os.path.join(tmp, config.PROJECT_FILE), 'w'), indent=1)
+    config.set_root(tmp)
+
+    prof = json.load(open(profile_path))
+    # point the profile's font paths at the bundled fonts
+    prof['font_out'] = [f'fonts/{os.path.basename(p)}'
+                        for p in prof.get('font_out', [])]
+    json.dump(prof, open(profile_path, 'w'), ensure_ascii=False, indent=1)
+    config.set_root(tmp)
+
+    from hanpatch import wrap
+    wrap.reset()
+
+    ad = adapter.project_adapter()
+    if not quiet:
+        print(f'extracting {os.path.basename(rom)} …', flush=True)
+    ad.extract(rom)
+
+    doc = json.load(open(os.path.join(tmp, 'manifest.json')))
+    if not quiet:
+        print(f'injecting {len(doc["entries"])} strings '
+              f'(digest {doc["digest"][:16]}) …', flush=True)
+    out = out or os.path.join(os.path.dirname(os.path.abspath(rom)),
+                              f"{info['title']} ({info['target']})"
+                              f"{os.path.splitext(rom)[1]}")
+    ad.inject(doc['entries'], rom, out)
+
+    result = _sha(out)
+    ok = (not info.get('output_sha256')) or result == info['output_sha256']
+    if not quiet:
+        print(f'{out}\n  sha256 {result}')
+        if info.get('output_sha256'):
+            print('  matches the author\'s build' if ok else
+                  '  DIFFERS from the author\'s build — inspect before using')
+    if workdir is None:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {'out': out, 'sha256': result, 'reproduced': ok}

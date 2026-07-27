@@ -2,9 +2,13 @@
 
 ## Ground rules
 
-1. **No game data, ever.** No ROMs, no extracted text, no translated scripts, no
-   patched images, no licensed fonts. `git config core.hooksPath .githooks`
-   installs a pre-commit hook that enforces this.
+1. **No game data or key material in *this* repository.** No ROMs, extracted
+   text, translated scripts, patched images, bootROMs, key files or licensed
+   fonts — not because the project judges your use, but because none of it is
+   ours to redistribute. `git config core.hooksPath .githooks` installs a
+   pre-commit hook; it stands down on `HANPATCH_ALLOW_GAME_DATA=1` or
+   `"allow_game_data": true`, which is the right setting for your own project.
+   See NOTICE.md.
 2. **A new gate needs an adversarial test.** Add the concrete input that used to
    slip through to `tests/test_gates.py`. A gate without a test that fails
    without it is not a gate.

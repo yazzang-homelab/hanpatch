@@ -80,6 +80,18 @@ def target():
     return cfg()['target']
 
 
+def allow_game_data():
+    """Whether this project intends to track game data / keys in git.
+
+    hanpatch never inspects a repository itself; this only tells the bundled
+    pre-commit hook to stand down. The decision is the operator's.
+    """
+    import os as _os
+    if _os.environ.get('HANPATCH_ALLOW_GAME_DATA') == '1':
+        return True
+    return bool(cfg().get('allow_game_data'))
+
+
 def work(*parts):
     return p('work', *parts)
 
