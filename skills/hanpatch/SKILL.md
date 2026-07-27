@@ -163,6 +163,26 @@ Ship the tooling and your own translation. Never redistribute the game, its
 extracted text, or a pre-patched ROM. Fonts need a redistributable licence —
 the reference build uses NeoDunggeunmo (OFL-1.1) and cites it.
 
+## Related
+
+Text is not the only thing that needs translating. Logos, texture fonts, and
+baked-in graphics live in image assets and need a separate pipeline — if a
+`texture-logo-kr`-style skill is available, use it for those and this one for the
+script. They compose: this pipeline owns the message containers and fonts, that
+one owns the texture assets.
+
+## Where the code is
+
+<https://github.com/yazzang-homelab/hanpatch>
+
+```bash
+git clone https://github.com/yazzang-homelab/hanpatch && cd hanpatch
+pip install -e .
+```
+
+Keep the game, its extracted text, and the built patch **outside** the
+repository — a pre-commit hook refuses them.
+
 ## Reference
 
 - `references/adapters.md` — the adapter contract in detail
