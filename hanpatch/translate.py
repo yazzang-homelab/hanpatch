@@ -126,7 +126,8 @@ def tag_skeleton(s):
     expected to vanish, so counting them turned every correct translation into a
     "control tag order changed" failure - 40445 of them on this corpus.
     """
-    found = TAG_RE.findall(s)
+    found = [match.group(0) for match in TAG_RE.finditer(s)]
+
     if SOURCE_ONLY_RE is not None:
         found = [t for t in found if not SOURCE_ONLY_RE.fullmatch(t)]
     return ['*' if t in MOVABLE_TAGS else t for t in found]
@@ -268,10 +269,26 @@ def tags(s):
     here would make every correct translation look like it lost a tag. Their absence is
     checked separately, in the one direction that matters.
     """
-    found = TAG_RE.findall(s)
+    found = [match.group(0) for match in TAG_RE.finditer(s)]
+
     if SOURCE_ONLY_RE is not None:
         found = [t for t in found if not SOURCE_ONLY_RE.fullmatch(t)]
     return sorted(found)
+
+def strip_source_only(text):
+    """Remove source-language annotations before validating model output.
+
+    A source-only token is a reading aid, not translated content. Models sometimes remove
+    it, sometimes translate its body and leave the wrapper, and sometimes preserve it
+    verbatim. All three cases have the same deterministic answer for the target: remove the
+    wrapper and its body. The public `check()` call still rejects an unnormalised target so
+    callers that bypass `Translator.batch()` cannot silently ship it; the batch path applies
+    this lossless-for-the-target cleanup before that gate, which prevents safe cleanup from
+    consuming a retry.
+    """
+    if SOURCE_ONLY_RE is None or not text:
+        return text
+    return SOURCE_ONLY_RE.sub('', text)
 
 
 def nl(s):
@@ -292,8 +309,13 @@ def dq7_delimiter_problems(text):
             source_only = (SOURCE_ONLY_RE.match(text, position)
                            if SOURCE_ONLY_RE is not None else None)
             if source_only is not None and source_only.end() > position:
+                token = source_only.group(0)
+                body = token[1:-1] if token.startswith('{') and token.endswith('}') else None
+                if body is None or any(delimiter in body for delimiter in '<>{}'):
+                    return ['invalid delimiter inside source-only markup']
                 position = source_only.end()
                 continue
+
         if char == '<':
             end = text.find('>', position + 1)
             if end < 0 or '\n' in text[position:end]:
@@ -332,7 +354,7 @@ def check(en, ko, gl, kind='default', group=None):
     # all, and 2171 kept a subset with no gate signal whatsoever, because the tag multiset
     # comparison never saw these tokens.
     if SOURCE_ONLY_RE is not None:
-        left = SOURCE_ONLY_RE.findall(ko)
+        left = [match.group(0) for match in SOURCE_ONLY_RE.finditer(ko)]
         if left:
             problems.append(f'source-only markup left in the translation: '
                             f'{sorted(set(left))[:4]}')
@@ -662,7 +684,7 @@ class Translator:
             for local, gi in enumerate(pending):
                 ko = obj.get(str(local))
                 if isinstance(ko, str):
-                    ko = ko.replace('\r\n', '\n')
+                    ko = strip_source_only(ko.replace('\r\n', '\n'))
                     ko, probs = check(items[gi]['en'], ko, gl_subset, self.kind,
                                       items[gi].get('group'))
                     if not probs:

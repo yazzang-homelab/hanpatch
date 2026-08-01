@@ -1973,6 +1973,8 @@ try:
          tr.tags(_en) == ['{HERO}'])
     case('a source-only token is excluded from the tag skeleton',
          tr.tag_skeleton(_en) == ['*'])
+    case('the batch normalizer removes a source-only wrapper before validation',
+         tr.strip_source_only('\ub3cc{2\uc871\uc7a5}') == '\ub3cc')
     case('a declared movable tag still counts',
          tr.tags('{HERO}\uac00') == ['{HERO}'])
     _, _so_probs = tr.check(_en, '\ub3cc{1\ub3cc}\ub97c {HERO}\uac00 \ubc00\ub2e4', {}, 'plain')
