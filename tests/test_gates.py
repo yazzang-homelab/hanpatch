@@ -1947,6 +1947,56 @@ finally:
     config.set_root(_sp_prev)
     shutil.rmtree(_sp_root, ignore_errors=True)
 
+
+print('== source-only markup: recognised, excluded from comparison, refused in output ==')
+_so_prev = config.root()
+_so_root = tempfile.mkdtemp(prefix='hp-sourceonly-')
+try:
+    os.makedirs(os.path.join(_so_root, 'profiles'))
+    os.makedirs(os.path.join(_so_root, 'work', 'ko'))
+    json.dump({'fam': []}, open(os.path.join(_so_root, 'work', 'text_src.json'), 'w'))
+    json.dump({'profile': 'profiles/p.json'},
+              open(os.path.join(_so_root, config.PROJECT_FILE), 'w'))
+    _so_prof = {'adapter': 'dq7', 'source_lang': 'ja', 'target_lang': 'ko',
+                'engine_wraps': False, 'register_default': 'plain',
+                'tag_pattern': r'<[^>\n]*>|\{[A-Z0-9_]+\}',
+                'source_only_pattern': r'\{[0-9]+[^}\n]*\}',
+                'movable_tags': ['{HERO}'], 'control_tags': ['<NOTICE>']}
+
+    json.dump(_so_prof, open(os.path.join(_so_root, 'profiles', 'p.json'), 'w'))
+    config.set_root(_so_root)
+    _en = '\u77f3{1\u3044\u3057}\u3092{HERO}\u304c\u62bc\u3059'
+    case('the recogniser matches a source-only token, so it is not a stray delimiter',
+         tr.dq7_delimiter_problems(_en) == [])
+
+    case('a source-only token is excluded from the tag multiset',
+         tr.tags(_en) == ['{HERO}'])
+    case('a source-only token is excluded from the tag skeleton',
+         tr.tag_skeleton(_en) == ['*'])
+    case('a declared movable tag still counts',
+         tr.tags('{HERO}\uac00') == ['{HERO}'])
+    _, _so_probs = tr.check(_en, '\ub3cc{1\ub3cc}\ub97c {HERO}\uac00 \ubc00\ub2e4', {}, 'plain')
+    case('a source-only token surviving in the target is rejected',
+         any('source-only markup' in p for p in _so_probs))
+
+    _so = config.source_only_re()
+    case('the source-only pattern matches source and translated wrapper shapes',
+         all(_so.fullmatch(t) for t in ('{1\u3044}', '{2\u307e\u3082\u306e}',
+                                        '{7\u304b\u307f}', '{2\uc871\uc7a5}')))
+
+    case('it does not match a declared substitution tag',
+         not _so.fullmatch('{HERO}'))
+    case('a declared title gets source-only checking',
+         config.source_only_re() is not None)
+    _p2 = dict(_so_prof); _p2.pop('source_only_pattern')
+    json.dump(_p2, open(os.path.join(_so_root, 'profiles', 'p.json'), 'w'))
+    config.set_root(_so_root)
+    case('an absent declaration means none, not match-everything',
+         config.source_only_re() is None)
+finally:
+    config.set_root(_so_prev)
+    shutil.rmtree(_so_root, ignore_errors=True)
+
 print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed, {len(SKIP)} skipped')
 if SKIP and not HAVE_CORPUS:

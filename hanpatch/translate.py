@@ -28,6 +28,7 @@ from hanpatch import tm
 from hanpatch import config
 
 TAG_RE = config.tag_re()
+SOURCE_ONLY_RE = config.source_only_re()
 HANGUL_RE = re.compile(r'[가-힣]')
 # Fullwidth Latin letters were the reference title's inner-monologue device, so a
 # survivor in the output meant untranslated or corrupt text. That is a per-title
@@ -41,6 +42,10 @@ LATIN_ALLOW = set(config.prof('latin_allow') or ()) | LATIN_ALLOW_ALWAYS
 # Defined in wrap.py because line wrapping needs the same distinction (a
 # substitution tag renders glyphs, a control tag renders nothing).
 MOVABLE_TAGS = wrap.SUBST_TAGS
+# DQ7 delimiter validation is structural rather than dependent on how a profile
+# spells its extraction regex. Its declared controls and substitutions remain the
+# only engine tokens accepted at translation time.
+_DQ7_BRACE_TOKEN = re.compile(r'\{[A-Z0-9_]+\}\Z')
 
 # ---------------------------------------------------------------- source language
 # The source script is a profile fact. `en` keeps every Latin-oriented heuristic
@@ -115,8 +120,16 @@ def segments(s):
 
 
 def tag_skeleton(s):
-    """Ordered control tags; movable substitution tags collapse to a wildcard."""
-    return ['*' if t in MOVABLE_TAGS else t for t in TAG_RE.findall(s)]
+    """Ordered control tags; movable substitution tags collapse to a wildcard.
+
+    Source-only annotations are dropped for the same reason `tags` drops them: they are
+    expected to vanish, so counting them turned every correct translation into a
+    "control tag order changed" failure - 40445 of them on this corpus.
+    """
+    found = TAG_RE.findall(s)
+    if SOURCE_ONLY_RE is not None:
+        found = [t for t in found if not SOURCE_ONLY_RE.fullmatch(t)]
+    return ['*' if t in MOVABLE_TAGS else t for t in found]
 
 
 _WORD = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?")
@@ -233,10 +246,11 @@ def reset():
     layer's substitution-tag set, and a stale alias would let a control tag be
     treated as movable under the new profile. Resetting `wrap` twice is harmless.
     """
-    global TAG_RE, LATIN_ALLOW, MOVABLE_TAGS, STYLE, SYSTEM_PROMPT
+    global TAG_RE, SOURCE_ONLY_RE, LATIN_ALLOW, MOVABLE_TAGS, STYLE, SYSTEM_PROMPT
     global _FONT_OK, _FONT_KEY
     wrap.reset()
     TAG_RE = config.tag_re()
+    SOURCE_ONLY_RE = config.source_only_re()
     LATIN_ALLOW = set(config.prof('latin_allow') or ()) | LATIN_ALLOW_ALWAYS
     MOVABLE_TAGS = wrap.SUBST_TAGS
     STYLE = dict(STYLE_DEFAULT)
@@ -248,11 +262,58 @@ def reset():
 
 
 def tags(s):
-    return sorted(TAG_RE.findall(s))
+    """Engine tokens whose presence the translation must preserve.
+
+    Source-only annotations are EXCLUDED: they are supposed to disappear, so counting them
+    here would make every correct translation look like it lost a tag. Their absence is
+    checked separately, in the one direction that matters.
+    """
+    found = TAG_RE.findall(s)
+    if SOURCE_ONLY_RE is not None:
+        found = [t for t in found if not SOURCE_ONLY_RE.fullmatch(t)]
+    return sorted(found)
 
 
 def nl(s):
     return s.count('\n')
+
+def dq7_delimiter_problems(text):
+    """Reject malformed or undeclared DQ7 delimiters without using ``tag_pattern``."""
+    if config.cfg().get('adapter') != 'dq7':
+        return []
+    declared = MOVABLE_TAGS | set(config.prof('control_tags') or ())
+    position = 0
+    while position < len(text):
+        char = text[position]
+        if char not in '<>{}':
+            position += 1
+            continue
+        if char in '<{':
+            source_only = (SOURCE_ONLY_RE.match(text, position)
+                           if SOURCE_ONLY_RE is not None else None)
+            if source_only is not None and source_only.end() > position:
+                position = source_only.end()
+                continue
+        if char == '<':
+            end = text.find('>', position + 1)
+            if end < 0 or '\n' in text[position:end]:
+                return [f'unconsumed delimiter {char!r}']
+            token = text[position:end + 1]
+            if token not in declared:
+                return [f'unknown delimiter form {token!r}']
+            position = end + 1
+            continue
+        if char == '{':
+            end = text.find('}', position + 1)
+            if end < 0:
+                return [f'unconsumed delimiter {char!r}']
+            token = text[position:end + 1]
+            if not _DQ7_BRACE_TOKEN.fullmatch(token) or token not in declared:
+                return [f'unknown delimiter form {token!r}']
+            position = end + 1
+            continue
+        return [f'unconsumed delimiter {char!r}']
+    return []
 
 
 def check(en, ko, gl, kind='default', group=None):
@@ -260,6 +321,22 @@ def check(en, ko, gl, kind='default', group=None):
     problems = []
     if not ko or not ko.strip():
         return ko, ['empty']
+    for side, value in (('source', en), ('target', ko)):
+        delimiter_problems = dq7_delimiter_problems(value)
+        if delimiter_problems:
+            return ko, [f'{side} delimiter integrity: {delimiter_problems[0]}']
+    # A source-only annotation is a reading aid for the source language. Keeping it puts
+    # source script inside the translation, and keeping SOME of them is worse than keeping
+    # all - it reads as corruption. Measured on DQ7 before this check existed: of 56824
+    # records carrying furigana, 38274 translations dropped them correctly, 1 kept them
+    # all, and 2171 kept a subset with no gate signal whatsoever, because the tag multiset
+    # comparison never saw these tokens.
+    if SOURCE_ONLY_RE is not None:
+        left = SOURCE_ONLY_RE.findall(ko)
+        if left:
+            problems.append(f'source-only markup left in the translation: '
+                            f'{sorted(set(left))[:4]}')
+            return ko, problems
     # control tags must keep their order and position; only runtime-substitution
     # placeholders may move to fit Korean word order
     if tags(en) != tags(ko):

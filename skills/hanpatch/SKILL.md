@@ -137,6 +137,30 @@ English prose is the better read, but the Japanese item names are what players
 recognise. Whatever you choose, it must be mechanically checkable, or it is a
 preference rather than a policy.
 
+## Source-only markup is a first-class profile fact
+
+Some containers carry annotations that belong to the source language only: furigana,
+pronunciation hints, editorial markers, or other reading aids. Do not leave these in the
+ordinary tag pattern and do not treat them as ordinary prose.
+
+Declare a `source_only_pattern` in the title profile. The pipeline MUST:
+
+- recognise the token when validating the source, so a shipped source is not reported as
+  malformed merely because the recogniser did not know its markup;
+- exclude it from the ordinary tag multiset and ordered skeleton, because disappearing is
+  the correct translation behaviour;
+- reject it when it survives in the target, including when a model translated the token's
+  contents but kept its wrapper (for example `{2족장}`), so matching only source-script
+  characters is insufficient;
+- return `None` for titles without this declaration. Missing declaration means the title
+  has no source-only class; it does not mean match everything.
+
+Run the new source rule against the source corpus before trusting it. If a validator rejects
+large numbers of source records, the validator is missing a container fact. If a failed
+output contains only removable source-only wrappers and the surrounding translation is
+sound, repair it with a deterministic sweep and re-run the gates; do not retranslate the
+whole corpus by reflex.
+
 ## When a gate fails
 
 Fix the translation. Do not widen the gate, do not add a waiver to make a red

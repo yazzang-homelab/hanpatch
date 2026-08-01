@@ -234,6 +234,10 @@ DEFAULT_PROFILE = {
     'page_break': ['<page>'],
     'movable_tags': [],
     'control_tags': [],
+    # Tokens the SOURCE carries that must not appear in the translation - reading aids and
+    # other annotations meaningful only in the source language. Absent means the title has
+    # none; it never means "match anything".
+    'source_only_pattern': '',
     # glossary scoping
     # Optional per-title model pool. Absent means the registry decides by role.
     'models': [],
@@ -397,7 +401,29 @@ def prof(key, default=None):
 
 
 def tag_re():
-    return re.compile(prof('tag_pattern'))
+    """Every engine token the source may contain, including source-only annotations.
+
+    `source_only_pattern` is folded in here rather than left to each caller, because a
+    token the recogniser does not match is not "text" - it is an unrecognised delimiter,
+    and the acceptance check then reports the SOURCE as malformed. Measured on DQ7: 187135
+    furigana annotations of the form {N<kana>} made 56824 of 66208 records fail the
+    delimiter check, which is the check being wrong about the cartridge rather than the
+    cartridge being wrong.
+    """
+    pat = prof('tag_pattern')
+    extra = prof('source_only_pattern')
+    return re.compile(f'{pat}|{extra}' if extra else pat)
+
+
+def source_only_re():
+    """Tokens that exist only in the source and must NOT survive translation.
+
+    None when the title declares none: an absent declaration means "this title has no
+    such tokens", not "check nothing", so callers get a null and skip the check rather
+    than silently matching everything.
+    """
+    pat = prof('source_only_pattern')
+    return re.compile(pat) if pat else None
 
 
 def title():
