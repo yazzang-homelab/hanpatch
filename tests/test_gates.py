@@ -1913,6 +1913,9 @@ case('a markup-only tail does not hide a real plain ending',
      _reg.of_korean('간다<wait=0.5>') == _reg.PLAIN)
 case('a real plain ending against a polite source is still reported',
      _reg.divergence('ご案内します。', '안내한다') is not None)
+case('mixed target evidence does not invent a whole-record register',
+     _reg.of_korean('이쪽으로 오세요. 이제 간다') is None
+     and _reg.divergence('もう行くのだ。', '이쪽으로 오세요. 이제 간다') is None)
 
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')

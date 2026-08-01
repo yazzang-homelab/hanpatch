@@ -129,6 +129,18 @@ def _polite_nikka(ko):
             return True
     return False
 
+def _polite_ending(text):
+    """Whether the final sentence ending, rather than an embedded quote, is polite."""
+    core = text.rstrip('.!?…"\'\u300d\u300f)] \t')
+    if any(m.end() == len(core) for m in _KO_POLITE.finditer(core)):
+        return True
+    for m in _NIKKA.finditer(core):
+        if m.end() == len(core):
+            prev = m.group(1)
+            if (ord(prev) - 0xAC00) % 28 == 17:
+                return True
+    return False
+
 
 # A Korean sentence ending that is unambiguously PLAIN. Needed because "no polite
 # marker" is NOT the same as "plain": most records in a container that stores display
@@ -152,10 +164,21 @@ def of_korean(ko):
     """
     if not ko:
         return None
-    if _KO_POLITE.search(ko) or _polite_nikka(ko):
-        return POLITE
+    polite = bool(_KO_POLITE.search(ko) or _polite_nikka(ko))
     tail = re.sub(r'<[^>]*>|\{[^}]*\}', '', ko.strip().split('\n')[-1]).strip()
-    return PLAIN if _KO_PLAIN.search(tail) else None
+    tail_polite = _polite_ending(tail)
+    plain = bool(_KO_PLAIN.search(tail)) and not tail_polite
+    # A quoted polite clause inside plain narration (or the reverse) is mixed evidence,
+    # not a reliable declaration for the whole record. The source-side marker_of() already
+    # treats both markers as undeclared; doing the same here prevents a target with one
+    # embedded polite phrase and a plain final line from being falsely rejected as wholly
+    # polite. This was the sole remaining blocker in a 102-character DQ7 row after five
+    # independent translators produced the same mixed shape.
+    if polite and plain:
+        return None
+    if polite:
+        return POLITE
+    return PLAIN if plain else None
 
 
 def divergence(en, ko):
