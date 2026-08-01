@@ -513,8 +513,14 @@ def build_prompt(items, gl_subset, kind, context):
                      '\n'.join(f'- {en} => {ko}' for en, ko in gl_subset.items()))
     if context:
         parts.append('[직전 번역 예시 - 문체/호칭 일관성 참고용, 번역 대상 아님]\n' +
-                     '\n'.join(f'EN: {e}\nKO: {k}' for e, k in context))
-    payload = {str(i): it['en'] for i, it in enumerate(items)}
+                     '\n'.join(f'EN: {strip_source_only(e)}\nKO: {k}'
+                               for e, k in context))
+    # Furigana and similar source-only annotations are removed from the prompt as well as
+    # from accepted output. Sending `{N<reading>}` to a model asks it to translate an
+    # annotation that the target engine never renders; on the last unresolved rows it also
+    # obscured the short hard term the gate required. The raw source remains authoritative
+    # for validation and manifest identity.
+    payload = {str(i): strip_source_only(it['en']) for i, it in enumerate(items)}
     # Register is per STRING, not per family: measured on this corpus only 39.6% of
     # records carry a marker at all and 178 of 339 families are internally mixed, so a
     # single family-level instruction would impose one voice on both sides of a
