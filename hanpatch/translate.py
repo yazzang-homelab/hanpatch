@@ -156,7 +156,7 @@ def copied_spans(en, ko, ngram=3):
     hits = []
     for i in range(len(et) - ngram + 1):
         g = tuple(et[i:i + ngram])
-        if g in kset and not all(w.upper() in LATIN_ALLOW for w in g):
+        if g in kset and not all(w.isdigit() or w.upper() in LATIN_ALLOW for w in g):
             hits.append(' '.join(g))
     return hits
 

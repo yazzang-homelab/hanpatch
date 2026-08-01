@@ -161,6 +161,12 @@ output contains only removable source-only wrappers and the surrounding translat
 sound, repair it with a deterministic sweep and re-run the gates; do not retranslate the
 whole corpus by reflex.
 
+A raw `<`, `>`, `{`, or `}` is a separate container fact. If the source stores one as literal
+content beside a real tag, declare it as `literal_delimiters` and measure the exception; do
+not make the delimiter checker permissive globally. The default is an empty list, and the
+same declared exception is checked on target output. A single observed extra brace in one
+DQ7 record was enough to block the last row until this fact was recorded.
+
 ## When a gate fails
 
 Fix the translation. Do not widen the gate, do not add a waiver to make a red
