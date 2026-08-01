@@ -18,6 +18,9 @@ from hanpatch import translate
 
 from hanpatch import config
 
+LAST_EXAMINED = 0
+
+
 def PATH():
     return config.out('manifest.json')
 def OVERRIDE():
@@ -36,12 +39,14 @@ def digest(entries):
 
 
 def build(src_path=None):
+    global LAST_EXAMINED
     src_path = src_path or config.src_path()
     glossary.assert_complete()
-    src = json.load(open(src_path))
+    src = config.load_object(src_path, 'the extracted source')
     tmdb = tm.load()
     gl = glossary.load()
-    override = json.load(open(OVERRIDE())) if os.path.exists(OVERRIDE()) else {}
+    override = (config.load_object(OVERRIDE(), 'the manifest override')
+                if os.path.exists(OVERRIDE()) else {})
 
     valid_keys = {(f, it['key']) for f, items in src.items() for it in items}
     problems = []
@@ -108,11 +113,22 @@ def build(src_path=None):
         os.fsync(fh.fileno())
     os.replace(tmp, PATH())
     print(f'manifest: {len(entries)} entries, digest {doc["digest"][:16]} -> {PATH()}')
+    LAST_EXAMINED = doc['count']
     return doc
 
 
 def load():
-    doc = json.load(open(PATH()))
+    doc = config.load_object(PATH(), 'the sealed manifest')
+    # Shape before content: `load_object` proves the document is an object, not
+    # that it is THIS document. Subscripting a manifest that has no `entries`
+    # raised a bare KeyError in the packer, the releaser and the scriptbook.
+    missing = [k for k in ('entries', 'digest') if k not in doc]
+    if missing:
+        raise SystemExit(f'the sealed manifest is missing {", ".join(missing)}: '
+                         f'{PATH()}; run `hanpatch gates` to reseal it')
+    if not isinstance(doc['entries'], dict):
+        raise SystemExit(f'the sealed manifest entries must be a JSON object, '
+                         f'got {type(doc["entries"]).__name__}: {PATH()}')
     if digest(doc['entries']) != doc['digest']:
         raise SystemExit('MANIFEST DIGEST MISMATCH: rebuild before packing')
     if doc.get('ruleset') != RULESET:

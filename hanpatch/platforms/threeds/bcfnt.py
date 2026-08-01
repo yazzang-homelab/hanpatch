@@ -1,6 +1,23 @@
-"""BCFNT (CFNT v3) reader/writer for Crimson Shroud fonts.
+"""BCFNT (CFNT v3) reader/writer.
 
-Sheet pixel format 4 = RGBA4444 (2 bytes/px), stored in 3DS tiled (morton) order.
+Sheet pixels are stored in 3DS tiled (morton) order in one of several formats, and
+which one is a per-title fact this module reads rather than assumes:
+
+    fmt  4 = RGBA4444, 2 bytes/px. RGB is a shading mask the engine multiplies
+             with the text colour; A is ink coverage. Crimson Shroud.
+    fmt  8 = A8,       1 byte/px.  Coverage only, no shading mask.
+    fmt 11 = A4,       4 bits/px.  Coverage only, two pixels per byte, LOW nibble
+             first. That nibble order is the one thing here a round trip cannot
+             prove, because `untile` and `tile` share the convention and a wrong
+             one cancels on both sides; `nibble_order_agrees()` below checks it
+             against the same glyph in an A8 font, where the byte order is
+             unambiguous.
+
+Measured on the two titles in this repo: Crimson Shroud ships fmt 4 at 64x64
+sheets, Dragon Quest VII ships fmt 11 for its six `tbud_maru` text fonts and fmt 8
+for `iwamaru_p15`, both at 1024x1024. An earlier version of this module hard-wired
+fmt 4 in both the reader and the writer, so a DQ7 font raised IndexError on the
+first sheet read - the A4 sheet is a quarter the size the RGBA4444 stride expects.
 """
 import struct
 from PIL import Image
@@ -11,6 +28,178 @@ for i in range(64):
     x = ((i >> 0) & 1) | ((i >> 1) & 2) | ((i >> 2) & 4)
     y = ((i >> 1) & 1) | ((i >> 2) & 2) | ((i >> 3) & 4)
     TILE_ORDER.append((x, y))
+
+
+#: bits per pixel for every format this module can read or write
+FORMAT_BITS = {4: 16, 8: 8, 11: 4}
+#: formats whose pixels carry a shading mask alongside coverage
+FORMAT_HAS_RGB = {4}
+
+
+def sheet_bytes(w, h, fmt):
+    """Size of one sheet in bytes, or refuse an unknown format."""
+    if fmt not in FORMAT_BITS:
+        raise ValueError(f'sheet pixel format {fmt} is not one this reader has '
+                         f'evidence for ({sorted(FORMAT_BITS)})')
+    return w * h * FORMAT_BITS[fmt] // 8
+
+
+def untile(raw, w, h, fmt):
+    """Tiled sheet bytes -> PIL 'LA' (luminance = shading mask, alpha = coverage).
+
+    For coverage-only formats the luminance channel is set to full, which is what
+    an engine that ignores RGB effectively renders.
+    """
+    want = sheet_bytes(w, h, fmt)
+    if len(raw) < want:
+        raise ValueError(f'sheet is {len(raw)} bytes, format {fmt} needs {want} for '
+                         f'{w}x{h}')
+    img = Image.new('LA', (w, h))
+    px = img.load()
+    p = 0
+    nib = 0
+    for ty in range(0, h, 8):
+        for tx in range(0, w, 8):
+            for (ox, oy) in TILE_ORDER:
+                if fmt == 4:
+                    v = raw[p] | (raw[p + 1] << 8)
+                    p += 2
+                    px[tx + ox, ty + oy] = (((v >> 12) & 0xF) * 17, (v & 0xF) * 17)
+                elif fmt == 8:
+                    px[tx + ox, ty + oy] = (255, raw[p])
+                    p += 1
+                else:                       # fmt 11, A4: low nibble first
+                    byte = raw[p + (nib >> 1)]
+                    a = (byte & 0xF) if not (nib & 1) else (byte >> 4)
+                    nib += 1
+                    px[tx + ox, ty + oy] = (255, a * 17)
+    return img
+
+
+def nibble_order_agrees(a4_font, a8_font, sample):
+    """Is the A4 low-nibble-first reading corroborated by an A8 font?
+
+    A4 packs two horizontally adjacent pixels of each morton tile into one byte, so
+    reading the nibbles in the wrong order swaps every adjacent PAIR - marginal at
+    16px, destroyed in an 8x9 cell - and no round trip can see it, since the writer
+    would swap them back. An A8 font has one byte per pixel and no such ambiguity,
+    so the same glyph rendered in both is an independent witness.
+
+    Returns (ok, score_as_read, score_swapped): `ok` is True when the coverage read
+    as low-nibble-first correlates with the A8 glyph better than its pairwise-swapped
+    variant does.
+    """
+    def coverage(f, ch):
+        idx = f.char_to_index(ch)
+        if idx is None:
+            return None
+        cell = f.glyph_image(idx)
+        return cell.split()[-1]
+
+    def swap_pairs(img):
+        out = img.copy()
+        px = out.load()
+        w, h = out.size
+        for y in range(h):
+            for x in range(0, w - 1, 2):
+                px[x, y], px[x + 1, y] = px[x + 1, y], px[x, y]
+        return out
+
+    def score(a, b):
+        """Normalised agreement between two coverage images, scale-independent."""
+        import statistics
+        w = min(a.width, b.width)
+        h = min(a.height, b.height)
+        agree = 0
+        total = 0
+        for y in range(h):
+            for x in range(w):
+                ia = a.getpixel((x, y)) > 0
+                ib = b.getpixel((x, y)) > 0
+                agree += (ia == ib)
+                total += 1
+        return agree / total if total else 0.0
+
+    same = swapped = 0.0
+    seen = 0
+    for ch in sample:
+        ca = coverage(a4_font, ch)
+        cb = coverage(a8_font, ch)
+        if ca is None or cb is None:
+            continue
+        seen += 1
+        same += score(ca, cb)
+        swapped += score(swap_pairs(ca), cb)
+    if not seen:
+        return (None, 0.0, 0.0)
+    return (same > swapped, same / seen, swapped / seen)
+
+
+def untile_rgba(raw, w, h, fmt):
+    """Tiled sheet bytes -> PIL 'RGBA' with the TRUE channels.
+
+    Distinct from `untile`, which collapses to luminance+alpha: for a format that
+    carries a shading mask the three channels are not equal, and callers that
+    convert to 'LA' get a weighted mix of them. Collapsing early therefore changes
+    the luminance a rebuild writes back, which is how a font that should have been
+    byte-identical stopped being so.
+    """
+    want = sheet_bytes(w, h, fmt)
+    if len(raw) < want:
+        raise ValueError(f'sheet is {len(raw)} bytes, format {fmt} needs {want}')
+    img = Image.new('RGBA', (w, h))
+    px = img.load()
+    p = 0
+    nib = 0
+    for ty in range(0, h, 8):
+        for tx in range(0, w, 8):
+            for (ox, oy) in TILE_ORDER:
+                if fmt == 4:
+                    v = raw[p] | (raw[p + 1] << 8)
+                    p += 2
+                    px[tx + ox, ty + oy] = (((v >> 12) & 15) * 17, ((v >> 8) & 15) * 17,
+                                            ((v >> 4) & 15) * 17, (v & 15) * 17)
+                elif fmt == 8:
+                    px[tx + ox, ty + oy] = (255, 255, 255, raw[p])
+                    p += 1
+                else:
+                    byte = raw[p + (nib >> 1)]
+                    a = (byte & 0xF) if not (nib & 1) else (byte >> 4)
+                    nib += 1
+                    px[tx + ox, ty + oy] = (255, 255, 255, a * 17)
+    return img
+
+
+def tile(img, fmt):
+    """PIL 'LA' -> tiled sheet bytes in `fmt`."""
+    w, h = img.size
+    if w % 8 or h % 8:
+        raise ValueError(f'sheet {w}x{h} is not a multiple of 8')
+    sheet_bytes(w, h, fmt)
+    px = img.load()
+    out = bytearray()
+    nibbles = []
+    for ty in range(0, h, 8):
+        for tx in range(0, w, 8):
+            for (ox, oy) in TILE_ORDER:
+                l, a = px[tx + ox, ty + oy]
+                if fmt == 4:
+                    # Delegate the quantisation to the original writer rather than
+                    # re-deriving it: `>> 4` and `// 17` agree only on multiples of
+                    # 17, and an antialiased coverage value is not one, so a
+                    # re-derivation would silently move the reference title's fonts.
+                    n = l >> 4
+                    out += struct.pack('<H', (n << 12) | (n << 8) | (n << 4) | (a >> 4))
+                elif fmt == 8:
+                    out.append(a)
+                else:
+                    nibbles.append(a // 17)
+    if fmt == 11:
+        for i in range(0, len(nibbles), 2):
+            lo = nibbles[i]
+            hi = nibbles[i + 1] if i + 1 < len(nibbles) else 0
+            out.append((hi << 4) | lo)
+    return bytes(out)
 
 
 def untile_rgba4444(raw, w, h):
@@ -119,7 +308,7 @@ class Bcfnt:
         return (self.def_left, self.def_gw, self.def_cw)
 
     def sheet_image(self, i):
-        return untile_rgba4444(self.sheets[i], self.sheet_w, self.sheet_h)
+        return untile(self.sheets[i], self.sheet_w, self.sheet_h, self.fmt)
 
     def glyph_image(self, idx):
         per = self.n_cols * self.n_rows
@@ -133,7 +322,7 @@ class Bcfnt:
 
 def build(cell_w, cell_h, baseline, linefeed, height, width, ascent,
           glyphs, encoding=1, font_type=1, alter_idx=0,
-          sheet_w=256, sheet_h=256):
+          sheet_w=256, sheet_h=256, fmt=4):
     """glyphs: ordered list of (codepoint, PIL 'LA' image cell_w x cell_h, (left, glyph_w, char_w)).
     Index 0 should be the fallback/space glyph."""
     n_cols = sheet_w // (cell_w + 1)
@@ -149,7 +338,7 @@ def build(cell_w, cell_h, baseline, linefeed, height, width, ascent,
                 break
             row, col = divmod(k, n_cols)
             img.paste(glyphs[gi][1], (col * (cell_w + 1), row * (cell_h + 1)))
-        sheets.append(tile_rgba4444(img))
+        sheets.append(tile(img, fmt))
     sheet_size = len(sheets[0])
 
     widths = [g[2] for g in glyphs]
@@ -231,7 +420,7 @@ def build(cell_w, cell_h, baseline, linefeed, height, width, ascent,
     finf_blk = blk(b'FINF', finf)
 
     tglp_body = struct.pack('<4BIHHHHHHI', cell_w, cell_h, baseline, max(w[2] for w in widths),
-                            sheet_size, n_sheets, 4, n_cols, n_rows,
+                            sheet_size, n_sheets, fmt, n_cols, n_rows,
                             sheet_w, sheet_h, sheet_data_off)
     tglp_blk = b'TGLP' + struct.pack('<I', tglp_blk_size) + tglp_body + b'\0' * pad_to + b''.join(sheets)
 

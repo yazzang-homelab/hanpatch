@@ -95,9 +95,19 @@ def dump(cia, out, keystore=None):
 
 
 def unpack_romfs(romfs_bin, out):
-    """Write every file of a RomFS image into `out`, returning path -> size."""
+    """Unpack a RomFS image to a directory tree, INCLUDING empty directories.
+
+    `RomFS.walk()` yields files only, so creating directories as a side effect of
+    writing files silently dropped every empty one. That matters for a rebuild
+    whose entry order is captured from the source image: the capture would describe
+    a directory the staged tree cannot produce, the directory count would differ,
+    and every metadata offset after it would shift.
+    Returns path -> size for every file written.
+    """
     r = romfs.RomFS(romfs_bin)
     sizes = {}
+    for dpath in romfs_build.sibling_order(romfs_bin)['dir_layout']:
+        os.makedirs(os.path.join(out, dpath.lstrip('/')), exist_ok=True)
     for path, off, size in r.walk():
         dst = os.path.join(out, path.lstrip('/'))
         os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
@@ -119,8 +129,26 @@ def read_romfs_file(romfs_bin, path):
     raise KeyError(path)
 
 
-def build_romfs(stage_dir, out):
-    return romfs_build.write_romfs(stage_dir, out)
+def dump_romfs(rom, out, keystore=None):
+    """Materialise a built container's decrypted RomFS image to `out`.
+
+    Both adapters need this during verify, and both had the same streaming loop.
+    Sharing the loop is safe because it is container-agnostic; staging and archive
+    verification stay per-title, since those really do differ.
+    """
+    n = open_ncch(rom, workdir=os.path.dirname(out) or None, keystore=keystore)
+    total = n.romfs_size * 0x200
+    with open(out, 'wb') as o:
+        pos = 0
+        while pos < total:
+            ln = min(1 << 22, total - pos)
+            o.write(n.romfs(pos, ln))
+            pos += ln
+    return out
+
+
+def build_romfs(stage_dir, out, order_from=None):
+    return romfs_build.write_romfs(stage_dir, out, order_from=order_from)
 
 
 def rebuild_cia(original, romfs_bin, out, keystore=None):
@@ -169,11 +197,39 @@ def content_hashes(cia):
 
 
 def superblock_hashes(cia, keystore=None):
-    """Verify the NCCH header's exheader/exefs/romfs superblock hashes."""
+    """Verify the NCCH header's exheader/exefs/romfs superblock hashes.
+
+    The ExeFS and RomFS hashes each cover the span their header DECLARES, in
+    media units, not a fixed 0x200. Assuming one unit reported a real retail
+    cartridge as corrupt - it declares two for RomFS - and, worse, the rebuild
+    path had the same assumption baked in, so a shrunken region agreed with a
+    shrunken check and both looked fine. The ExHeader is different: its hash
+    covers a fixed 0x400 bytes and has no declared-size field, so it stays
+    hard-coded.
+    """
     n = open_ncch(cia, keystore=keystore)
     out = {}
-    for label, off, data in [('exheader', 0x160, n.exheader()[:0x400]),
-                             ('exefs', 0x1C0, n.exefs(0, 0x200)),
-                             ('romfs', 0x1E0, n.romfs(0, 0x200))]:
-        out[label] = hashlib.sha256(data).digest() == n.h[off:off + 0x20]
+    # A section that is ABSENT has nothing to verify and must not be reported as
+    # corrupt; `or 1` used to conflate that with "present, region unspecified".
+    if n.exh_size:
+        out['exheader'] = (hashlib.sha256(n.exheader()[:0x400]).digest()
+                           == n.h[0x160:0x180])
+    for label, off, size_at, units_at, read in (
+            ('exefs', 0x1C0, 0x1A4, 0x1A8, n.exefs),
+            ('romfs', 0x1E0, 0x1B4, 0x1B8, n.romfs)):
+        if not struct.unpack_from('<I', n.h, size_at)[0]:
+            continue
+        units = struct.unpack_from('<I', n.h, units_at)[0] or 1
+        out[label] = hashlib.sha256(read(0, units * 0x200)).digest() == n.h[off:off + 0x20]
+    if not out:
+        # Skipping absent sections is right, but an empty result must not be
+        # readable as "nothing wrong". Before this round `or 1` guaranteed three
+        # keys, so no caller needed an emptiness guard and only one adapter grew
+        # one; making the refusal a property of THIS layer is what stops the next
+        # caller from iterating {} and appending zero problems.
+        raise SystemExit(
+            f'{cia}: this NCCH declares no exheader, no exefs and no romfs, so there '
+            f'is no superblock hash to verify and no structural evidence that the '
+            f'image is intact. Refusing to return an empty result that reads as a '
+            f'clean check.')
     return out

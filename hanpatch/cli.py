@@ -61,12 +61,12 @@ def cmd_info(args):
             _p(f'rom      {os.path.basename(rom)} — {e}')
     src = config.src_path()
     if os.path.exists(src):
-        d = json.load(open(src))
+        d = config.load_object(src, 'the extracted source')
         _p(f'source   {sum(len(v) for v in d.values())} entries, '
            f'{len(d)} families')
     man = config.out('manifest.json')
     if os.path.exists(man):
-        m = json.load(open(man))
+        m = config.load_object(man, 'the sealed manifest')
         _p(f'manifest {len(m["entries"])} entries, digest {m["digest"][:16]}')
     return 0
 
@@ -83,6 +83,10 @@ def cmd_extract(args):
 def cmd_translate(args):
     from hanpatch import run
     argv = ['--family', args.family]
+    if args.models:
+        argv += ['--models', args.models]
+    if args.limit:
+        argv += ['--limit', str(args.limit)]
     if args.workers:
         argv += ['--workers', str(args.workers)]
     if args.batch:
@@ -247,6 +251,11 @@ def main(argv=None):
 
     s = sub.add_parser('translate', help='machine-translate one family')
     s.add_argument('--family', required=True)
+    s.add_argument('--models', default='',
+                   help='explicit comma-separated pool; beats the profile and the '
+                        'registry, for narrowing to endpoints with budget left')
+    s.add_argument('--limit', type=int, default=0,
+                   help='translate at most N strings, for a bounded trial')
     s.add_argument('--workers', type=int)
     s.add_argument('--batch', type=int)
     s.add_argument('--refail', action='store_true')

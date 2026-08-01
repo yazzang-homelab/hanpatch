@@ -74,14 +74,15 @@ def create(out=None, rom=None, built=None, notes=None):
     cfg = config.cfg()
     doc = manifest.load()
     rom = rom or config.p(cfg.get('rom', 'game.cia'))
-    built = built or config.dist(f"{cfg['title']} ({config.target()}).cia")
+    built = built or config.dist(config.built_name())
     out = out or config.dist(f"{cfg['title']} ({config.target()}).hpk")
 
     approved = config.out('manifest.approved')
     if not os.path.exists(approved):
         raise SystemExit('refusing to release: the manifest was never approved '
                          'by the QA gate. Run `hanpatch gates` first.')
-    if json.load(open(approved)).get('digest') != doc['digest']:
+    approval = config.load_object(approved, 'the approval token')
+    if approval.get('digest') != doc['digest']:
         raise SystemExit('refusing to release: the manifest changed after the '
                          'QA gate approved it.')
 
@@ -159,7 +160,7 @@ def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
     json.dump(proj, open(os.path.join(tmp, config.PROJECT_FILE), 'w'), indent=1)
     config.set_root(tmp)
 
-    prof = json.load(open(profile_path))
+    prof = config.load_object(profile_path, 'the bundled title profile')
     # point the profile's font paths at the bundled fonts
     prof['font_out'] = [f'fonts/{os.path.basename(p)}'
                         for p in prof.get('font_out', [])]
@@ -174,7 +175,8 @@ def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
         print(f'extracting {os.path.basename(rom)} …', flush=True)
     ad.extract(rom)
 
-    doc = json.load(open(os.path.join(tmp, 'manifest.json')))
+    doc = config.load_object(os.path.join(tmp, 'manifest.json'),
+                             'the sealed manifest')
     if not quiet:
         print(f'injecting {len(doc["entries"])} strings '
               f'(digest {doc["digest"][:16]}) …', flush=True)

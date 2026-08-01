@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 
+from hanpatch import glossary
 from hanpatch import providers
 from hanpatch import tm
 from hanpatch import capacity as capmod  # noqa: E402
@@ -18,21 +19,26 @@ from hanpatch import config
 def REVIEW_FMT():
     return config.out('review_%s.json')
 # primary model per family keeps the register stable; the rest are repair fallbacks
-POOLS = {
-    'default': ['nimproxy:z-ai/glm-5.2',
-                'opencode:nemotron-3-ultra-free',
-                'openrouter:google/gemma-4-31b-it:free',
-                'nimproxy:deepseek-ai/deepseek-v4-pro'],
-}
+# There is deliberately no model table here any more. This one WAS the second
+# authority on model selection: it bypassed providers.build_pool() entirely, so the
+# registry-derived, liveness-verified pool was not what the translator actually
+# called. It still listed nimproxy:z-ai/glm-5.2, which was measured as producing no
+# first byte in 90 seconds and dominated the retries of a real run, and
+# nimproxy:deepseek-ai/deepseek-v4-pro, whose slug is the PAID identity on
+# api.deepseek.com and which the registry grants no role. Selection order is now:
+# --models (an explicit caller list), then the profile's own `models` if the title
+# declares one, then providers.build_pool(), which resolves the registry by role and
+# falls back to the pinned specs.
 
 
 def load_review(path):
     if os.path.exists(path):
-        return json.load(open(path))
+        return config.load_object(path, 'the translation review shard')
     return {}
 
 
-def save_json_locked(path, updates, removals=()):
+
+def save_json_locked(path, updates, removals=(), what='the translation state shard'):
     """Merge `updates` into the on-disk JSON under an exclusive inter-process
     lock, then replace it durably. Safe for several runners on one shard."""
     import fcntl
@@ -43,10 +49,7 @@ def save_json_locked(path, updates, removals=()):
         try:
             cur = {}
             if os.path.exists(path):
-                try:
-                    cur = json.load(open(path))
-                except ValueError:
-                    cur = {}
+                cur = config.load_object(path, what)
             cur.update(updates)
             for k in removals:
                 cur.pop(k, None)
@@ -81,23 +84,26 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     providers.load_dotenv()
-    specs = args.models.split(',') if args.models else POOLS.get(args.family, POOLS['default'])
-    pool = [p for p in (providers.make(s) for s in specs) if p]
-    src = json.load(open(config.src_path()))
+    if args.models:
+        pool = providers.build_pool(args.models.split(','))
+    else:
+        declared = config.prof('models') or []
+        pool = providers.build_pool(declared or None)
+    src = config.load_object(config.src_path(), 'the extracted source')
     if args.qafail:
-        flagged = json.load(open(config.out('qa_flagged.json')))
+        flagged = config.load_object(config.out('qa_flagged.json'),
+                                     'the QA flagged review')
         todo = []
         seen = set()
         for it in src[args.family]:
             en = it['en']
             if en in flagged and en not in seen:
                 seen.add(en)
-                todo.append({'en': en, 'jp': it['jp'],
+                todo.append({'en': en, 'jp': it.get('jp', ''),
                              'group': capmod.group(args.family, it['key']),
                              'qa': flagged[en]['r'],
                              'refs': [f"{args.family}:{it['key']}"]})
     elif args.refail:
-        import glossary
         merged = tm.load()
         gl = glossary.load()
         todo = []
@@ -112,7 +118,7 @@ def main(argv=None):
             _, probs = translate.check(en, ko, glossary.relevant(gl, [en]), args.family)
             if probs:
                 seen.add(en)
-                todo.append({'en': en, 'jp': it['jp'],
+                todo.append({'en': en, 'jp': it.get('jp', ''),
                              'group': capmod.group(args.family, it['key']),
                              'refs': [f"{args.family}:{it['key']}"]})
     else:
@@ -142,15 +148,21 @@ def main(argv=None):
     shard = config.out(f'tm_{args.family}.json')
     review_path = REVIEW_FMT() % args.family
     review = load_review(review_path)
-    tmdb = json.load(open(shard)) if os.path.exists(shard) else {}
+    tmdb = (config.load_object(shard, 'the translation memory shard')
+            if os.path.exists(shard) else {})
     # fixed style anchor: already-approved pairs from this family keep the
     # register identical across parallel workers
     anchor = []
     merged = tm.load()
-    for it in json.load(open(config.src_path()))[args.family]:
+    for it in config.load_object(config.src_path(), 'the extracted source')[args.family]:
         en = it['en']
         if en in merged and len(anchor) < 3 and len(en) > 60:
             anchor.append((en, merged[en]))
+    # Snapshot the enforced contract before any row is written, so every row this run
+    # produces carries the version it was validated against.
+    anchor_ver = glossary.record_version()
+    print(f'  anchor version {anchor_ver} '
+          f'({len(glossary.enforced_contract())} enforced terms)', flush=True)
     lock = threading.Lock()
     t0 = time.time()
     done = [0]
@@ -164,9 +176,19 @@ def main(argv=None):
             bad = {batch[k]['en']: {'refs': batch[k]['refs'],
                                     'reason': 'validation failed'} for k in failed}
             tmdb.update(got)
-            save_json_locked(shard, got)
-            save_json_locked(config.out(f'prov_{args.family}.json'), prov)
-            save_json_locked(review_path, bad, removals=list(got))
+            save_json_locked(shard, got, what='the translation memory shard')
+            save_json_locked(config.out(f'prov_{args.family}.json'), prov,
+                             what='the provenance shard')
+            # Which enforced contract did this row pass under? Without it an anchor
+            # edit can only invalidate everything, because nothing records what was
+            # actually validated. With it, glossary.resweep() selects just the rows
+            # whose own obligations moved - soft hints are excluded from the contract
+            # by construction, so renaming a hint costs no revalidation at all.
+            save_json_locked(config.out(f'anchorver_{args.family}.json'),
+                             {en: anchor_ver for en in got},
+                             what='the anchor version shard')
+            save_json_locked(review_path, bad, removals=list(got),
+                             what='the translation review shard')
             done[0] += len(batch)
             print(f'  [{done[0]}/{len(todo)}] ok={tr.stats["ok"]} '
                   f'fail={tr.stats["failed"]} calls={tr.stats["calls"]} '

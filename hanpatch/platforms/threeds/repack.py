@@ -10,6 +10,8 @@ import os
 import struct
 import sys
 
+from hanpatch.platforms.threeds.copyx import copy_exact
+
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 
@@ -62,16 +64,26 @@ class Cia:
 
 def encrypt_section(key, partition_id, section, plaintext_stream, out, total,
                     no_crypto=False):
-    """Stream-encrypt `total` bytes from plaintext_stream to out."""
-    iv = bytes(reversed(partition_id)) + bytes([section]) + b'\0' * 7
-    init = int.from_bytes(iv, 'big')
-    c = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=init))
+    """Stream-encrypt `total` bytes from plaintext_stream to out.
+
+    A plaintext NCCH has no key, so the cipher must not be constructed at all -
+    building it first and only checking the flag inside the loop made every
+    decrypted dump crash with a TypeError from AES.new(None, ...) before a single
+    byte moved.
+    """
+    c = None
+    if not no_crypto:
+        iv = bytes(reversed(partition_id)) + bytes([section]) + b'\0' * 7
+        c = AES.new(key, AES.MODE_CTR,
+                    counter=Counter.new(128, initial_value=int.from_bytes(iv, 'big')))
     written = 0
     while written < total:
         b = plaintext_stream.read(min(CHUNK, total - written))
         if not b:
+            # The section is padded to its declared size on purpose: a RomFS is
+            # media-unit aligned and the tail is defined to be zero.
             b = b'\0' * min(CHUNK, total - written)
-        if not no_crypto:
+        if c is not None:
             b = c.encrypt(b)
         out.write(b)
         written += len(b)
@@ -94,9 +106,21 @@ def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
     # patch NCCH header
     struct.pack_into('<I', header, 0x104, new_content_size // 0x200)
     struct.pack_into('<II', header, 0x1B0, n.romfs_off, romfs_pad // 0x200)
-    struct.pack_into('<I', header, 0x1B8, 1)          # hash region = 1 media unit
+    # The RomFS superblock hash covers the region the header DECLARES, and that
+    # declaration is a per-title fact: this cartridge ships 2 media units, and
+    # overwriting it with 1 both shrank what the console validates and changed a
+    # field the title had set. Preserve the declared size, hash exactly that
+    # span, and only fall back to one unit when the source declares nothing.
+    hash_region = struct.unpack_from('<I', n.h, 0x1B8)[0] or 1
+    struct.pack_into('<I', header, 0x1B8, hash_region)
+    span = hash_region * 0x200
     with open(new_romfs, 'rb') as rf:
-        first = rf.read(0x200)
+        first = rf.read(span)
+    if len(first) < span:
+        raise SystemExit(
+            f'the new RomFS is {len(first)} bytes, shorter than the {span}-byte '
+            f'superblock region the NCCH header declares ({hash_region} media '
+            f'units); refusing to write a hash over data that does not exist')
     header[0x1E0:0x200] = hashlib.sha256(first).digest()
 
     src = open(src_path, 'rb')
@@ -104,11 +128,8 @@ def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
         o.write(bytes(header))
         # header..romfs is copied verbatim, still encrypted, so no key is needed
         src.seek(base + 0x200)
-        left = romfs_off_bytes - 0x200
-        while left:
-            b = src.read(min(CHUNK, left))
-            o.write(b)
-            left -= len(b)
+        copy_exact(src, o, romfs_off_bytes - 0x200,
+                   f'{src_path} header..romfs region', at=base + 0x200)
         with open(new_romfs, 'rb') as rf:
             encrypt_section(n.secondary, n.partition_id, 3, rf, o, romfs_pad,
                             no_crypto=n.no_crypto)
@@ -184,11 +205,8 @@ def rebuild(cia_path, new_romfs, out_path, keystore=None):
                 o.write(b)
         for c in cia.chunks[1:]:
             cia.f.seek(c['offset'])
-            left = c['size']
-            while left:
-                b = cia.f.read(min(CHUNK, left))
-                o.write(b)
-                left -= len(b)
+            copy_exact(cia.f, o, c['size'], f'{cia.path} content {c["idx"]}',
+                       at=c['offset'])
         if cia.meta_size:
             cia.f.seek(cia.off_content + cia.content_size)
             o.write(cia.f.read(cia.meta_size))

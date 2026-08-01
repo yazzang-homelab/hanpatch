@@ -40,8 +40,8 @@ def producers():
     out = {}
     for p in _glob.glob(config.out('prov_*.json')):
         try:
-            out.update(json.load(open(p)))
-        except (OSError, ValueError):
+            out.update(config.load_object(p, 'the provenance shard'))
+        except (OSError, SystemExit):
             continue
     return out
 JUDGES = ['nimproxy:deepseek-ai/deepseek-v4-pro',
@@ -53,34 +53,10 @@ JUDGES = ['nimproxy:deepseek-ai/deepseek-v4-pro',
           'opencode:mimo-v2.5-free',
           'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
 
-SYSTEM = """당신은 영어→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
-각 항목의 영어 원문과 한국어 번역을 비교해 평가한다.
+SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
+각 항목의 %(source_name)s 원문과 한국어 번역을 비교해 평가한다.
 
-[이 프로젝트의 확정된 표기 정책 - 위반이 아니므로 감점하지 말 것]
-0. 산문(내레이션·대사)의 기준 원문은 영어판이다. 영어판이 일본어 원판과 내용·화자가 다를 때는
-   영어판을 따른다. 반면 아래 1번의 고유명 표기는 일본어 원판을 따른다.
-1. 이 게임은 일본 원작이다. 무기·방어구·아이템·마법·기술의 고유명은 영어판 명칭이 아니라
-   일본어 원판 표기를 기준으로 음역한다. 예: Vigor Leaf(キュアリーフ)→"큐어 리프",
-   Occator Spike(ヴァルカンパイク)→"발칸 파이크", Cudgel(ワンド)→"완드",
-   Heaven Strike(ヘヴンリーブロウ)→"헤븐리 블로우", Mass Heal(ラージヒール)→"라지 힐".
-   영어 명칭과 달라 보여도 오역이 아니다.
-2. 능력·아이템 설명문은 의도적으로 짧은 고정 문형을 쓴다.
-   "SINGLE TARGET"→"단일 대상", "MULTIPLE TARGETS"→"다수 대상",
-   "Deals X DAMAGE"→"X속성 피해를 준다", 무속성/풍속성/토속성/뇌속성/수속성/화속성/빙속성/광속성/암속성.
-   원문의 대문자 강조를 한국어에서 재현하지 않는 것은 정상이다.
-3. 상태이상·버프 명칭은 아래 GLOSSARY의 표기를 사용한다. GLOSSARY와 일치하면 정확한 것이다.
-4. 원문이 빈 문자열이거나 공백뿐인 항목, 개발용 더미 문자열은 a=5, f=5로 처리한다.
-5. <player> <enemy> <item> <magic> <tech> <status> <damage> <gain> <num1> 등 꺾쇠 안의 토큰은
-   실행 중에 이름·수치로 치환되는 자리표시자다. 번역하지 않고 그대로 두는 것이 정상이며,
-   한국어 어순에 맞게 위치가 바뀌는 것도 정상이다. <br> <page> <key> <color=...> <lineheight=...>
-   <wait=...> <script=...>는 서식·연출 태그이므로 내용이 없다고 감점하지 말 것.
-5-1. jp_original 필드는 일본어 원판이다. 고유명 표기와 어감의 근거로 삼되, 산문의 내용·화자가
-   영어판과 다르면 0번 정책에 따라 영어판을 기준으로 판단한다.
-   영어판에 없고 jp_original에 있는 정보를 한국어가 담고 있어도 감점하지 말 것.
-6. 전투 로그는 일본어 원판 관례를 따른다. 적이 피해를 받는 문장은 "<enemy>에게 N의 피해를 주었다!",
-   아군이 받는 문장은 "<player>는 N의 피해를 받았다!"로 시점을 바꿔 쓴다. MP는 "축적되었다",
-   턴 알림은 "공격 턴"이라고 쓴다. 이는 확정된 표기이므로 감점하지 말 것.
-
+%(judge_policy)s[판정 우선순위] 제목별 [표기 정책]은 표기와 관례 중 감점하지 않을 사항만 정하며, 실제 오역·누락·비문을 pass로 판정하도록 허용할 수 없고 반드시 defect로 판정한다.
 평가 기준:
 - adequacy(정확성) 1~5: 원문의 의미가 빠짐/왜곡/오역 없이 전달되었는가. 다의어를 문맥에 맞게 옮겼는가.
 - fluency(자연스러움) 1~5: 어색한 직역, 비문, 오타, 깨진 단어, 잘못된 조사·띄어쓰기가 없는가.
@@ -96,12 +72,30 @@ SYSTEM = """당신은 영어→한국어 게임 로컬라이제이션 품질 심
 {"<id>": {"a": <adequacy>, "f": <fluency>, "d": "pass|defect|policy", "r": "<reason>"}}
 마크업 태그(<...>)와 줄바꿈은 평가 대상이 아니므로 무시한다. 번역문을 다시 쓰지 말고 점수만 매긴다."""
 
+NEUTRAL_POLICY = """[일반 심사 규칙 - 위반이 아니므로 감점하지 말 것]
+원문이 빈 문자열이거나 공백뿐인 항목, 개발용 더미 문자열은 a=5, f=5로 처리한다.
+<player> <enemy> <item> <magic> <tech> <status> <damage> <gain> <num1> 등 꺾쇠 안의 토큰은
+실행 중에 이름·수치로 치환되는 자리표시자다. 번역하지 않고 그대로 두는 것이 정상이며,
+한국어 어순에 맞게 위치가 바뀌는 것도 정상이다. <br> <page> <key> <color=...> <lineheight=...>
+<wait=...> <script=...>는 서식·연출 태그이므로 내용이 없다고 감점하지 말 것."""
+
+
+def system_prompt():
+    """Render the source-aware judge instructions for the active title profile."""
+    source_lang = config.source_lang()
+    source_name = {'en': '영어', 'ja': '일본어'}.get(source_lang, source_lang)
+    judge_policy = config.prof('judge_policy') or NEUTRAL_POLICY
+    return SYSTEM_TEMPLATE % {
+        'source_name': source_name,
+        'judge_policy': f'{judge_policy}\n\n',
+    }
+
 
 def load():
     """pair_key -> list of verdict records (one per judge)."""
     if not os.path.exists(QA_PATH()):
         return {}
-    doc = json.load(open(QA_PATH()))
+    doc = config.load_object(QA_PATH(), 'the QA verdict file')
     out = {}
     for k, v in doc.items():
         out[k] = v if isinstance(v, list) else [v]
@@ -146,12 +140,12 @@ def main(argv=None):
 
     providers.load_dotenv()
     pool = [p for p in (providers.make(s) for s in JUDGES) if p]
-    src = json.load(open(config.src_path()))
+    src = config.load_object(config.src_path(), 'the extracted source')
     doc = load()
     prov_of = producers()
     if not os.path.exists(MANIFEST()):
         raise SystemExit('run mtl/manifest.py first: QA judges the sealed values')
-    man = json.load(open(MANIFEST()))['entries']
+    man = config.load_object(MANIFEST(), 'the sealed manifest')['entries']
     by_key = {}
     for fam, items in src.items():
         for it in items:
@@ -165,7 +159,7 @@ def main(argv=None):
             continue
         en = it['en']
         if tm.is_skip(en, it['key']) or not en.strip():
-            en = it.get('jp', en)      # placeholder EN row: JP is the real source
+            en = it.get('jp') or en      # placeholder EN row: JP is the real source
         pk = pair_key(en, ko)
         have = {r.get('judge') for r in doc.get(pk, [])}
         if len(have) >= args.judges or pk in seen:
@@ -199,7 +193,7 @@ def main(argv=None):
                 continue
             try:
                 sub = glossary.relevant(glossary.load(), [r[0] for r in batch])
-                raw = prov.chat(SYSTEM, prompt(batch, sub), temperature=0.0,
+                raw = prov.chat(system_prompt(), prompt(batch, sub), temperature=0.0,
                                 max_tokens=min(4000, 400 + 40 * len(batch)))
             except RuntimeError as e:
                 print(f'    ! {e}'[:160], flush=True)

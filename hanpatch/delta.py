@@ -31,6 +31,8 @@ import struct
 import subprocess
 import zlib
 
+from hanpatch import config
+
 MAGIC = b'HPD1'
 BLOCK = 1 << 16
 CHUNK = 1 << 22
@@ -175,7 +177,8 @@ def xdelta_create(old, new, out, meta=None):
 
 def xdelta_apply(old, patch, out, verify=True):
     side = patch + '.json'
-    info = json.load(open(side)) if os.path.exists(side) else {}
+    info = (config.load_object(side, 'the patch side-car')
+            if os.path.exists(side) else {})
     if verify and info.get('old_sha256'):
         got = sha256(old)
         if got != info['old_sha256']:

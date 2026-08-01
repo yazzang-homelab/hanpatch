@@ -38,12 +38,12 @@ def load():
     """Merge the hand-written TM with every per-family shard."""
     out = {}
     if os.path.exists(TM_PATH()):
-        out.update(json.load(open(TM_PATH())))
+        out.update(config.load_object(TM_PATH(), 'the primary translation memory'))
     import glob
     for p in sorted(glob.glob(config.out('tm_*.json'))):
         try:
-            out.update(json.load(open(p)))
-        except (OSError, ValueError):
+            out.update(config.load_object(p, 'the translation memory shard'))
+        except (OSError, SystemExit):
             continue
     return out
 
@@ -80,7 +80,7 @@ def untranslated(src):
             if lookup(tm, s) is not None:
                 continue
             if s not in seen:
-                seen[s] = {'en': s, 'jp': it['jp'], 'refs': [],
+                seen[s] = {'en': s, 'jp': it.get('jp', ''), 'refs': [],
                            'group': fn + '/' + __import__('re').sub(
                                r'_#+$', '',
                                __import__('re').sub(r'\d+', '#', it['key']))}

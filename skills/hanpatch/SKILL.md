@@ -144,6 +144,24 @@ line green, do not lower the judge count. A waiver is for a *defensible policy
 disagreement* with a written reason — not for a defect you would rather not
 address.
 
+## Judging state, and what a green run does not prove
+
+The gates prove properties of an artifact. They do not adjudicate between two
+records that disagree, and they are not a progress percentage. Read
+`references/evidence-authority.md` before resolving a conflict or reporting
+status: runtime observation outranks readback, readback outranks a sealed
+digest, and nothing outranks anything merely by being newer.
+
+Report readiness on separate axes — pipeline, coverage, quality, runtime
+verification, release. Quoting the gate pass rate as overall progress is the
+most common way this project lies to itself.
+
+A player-found defect is by definition one the gates missed, so fixing the
+string is half the work: it has to land somewhere a machine re-checks it, or it
+comes back on the next rebuild. Failed hypotheses get recorded with their
+revisit condition rather than deleted. Read
+`references/reports-and-failures.md`.
+
 ## Honest limitations
 
 State these rather than implying coverage:
@@ -229,3 +247,5 @@ repository — a pre-commit hook refuses them.
 - `references/qa-panel.md` — judge panel, dispositions, waivers
 - `references/3ds.md` — CIA/NCCH/RomFS/BCFNT notes and pitfalls
 - `references/scriptbook.md` — generating a bilingual script book from the seal
+- `references/evidence-authority.md` — evidence order, conflict rules, readiness axes
+- `references/reports-and-failures.md` — report triage, regression cases, failure ledger

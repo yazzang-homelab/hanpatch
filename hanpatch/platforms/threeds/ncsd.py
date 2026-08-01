@@ -13,6 +13,8 @@ import hashlib
 import os
 import struct
 
+from hanpatch.platforms.threeds.copyx import copy_exact
+
 MEDIA = 0x200
 CHUNK = 1 << 22
 
@@ -68,14 +70,29 @@ def rebuild(original, replacements, out):
     """
     src = Ncsd(original)
     head = bytearray(src.head)
+    # Start where the card actually starts its first partition, not at the end of
+    # the card-info header. A cartridge leaves a gap there - this one begins
+    # partition 0 at 0x4000 and fills 0x1200..0x4000 with 0xFF - and packing the
+    # partitions forward moves every one of them, rewrites that pad, and makes an
+    # otherwise untouched rebuild differ from the source across the whole image.
+    # A partition keeps its original offset whenever nothing before it has grown
+    # past it, so an unchanged rebuild reproduces the original layout exactly.
     pos = align(0x200 + len(src.card_info))
     layout = []
     for p in src.parts:
         path = replacements.get(p['idx'])
         size = os.path.getsize(path) if path else p['size']
+        if path and size == 0:
+            # A zero-length partition is not a partition. Accepting it wrote a
+            # table entry of size 0 and then died with a bare KeyError deeper in,
+            # which tells an operator nothing about what they handed us.
+            raise SystemExit(
+                f'partition {p["idx"]}: replacement {path} is empty; a CCI '
+                f'partition cannot be zero bytes')
+        offset = p['offset'] if p['offset'] >= pos else pos
         layout.append({'idx': p['idx'], 'src': path, 'orig': p,
-                       'offset': pos, 'size': align(size)})
-        pos += align(size)
+                       'offset': offset, 'size': align(size)})
+        pos = offset + align(size)
     end = pos
 
     # partition table
@@ -85,28 +102,50 @@ def rebuild(original, replacements, out):
         struct.pack_into('<II', head, 0x120 + L['idx'] * 8,
                          L['offset'] // MEDIA, L['size'] // MEDIA)
 
-    # media size: keep the declared card size when the content still fits
+    # media size: keep the declared card size when the content still fits. Growing
+    # it is a real event - the image now declares a larger card than the source -
+    # so it is reported rather than performed quietly.
     card = src.media_size * MEDIA
+    grew_from = card
     while card < end:
         card *= 2
+    if card != grew_from:
+        print(f'card size grown {grew_from} -> {card} bytes: the rebuilt content is '
+              f'{end} bytes, past the {grew_from} the source declared')
     struct.pack_into('<I', head, 0x104, card // MEDIA)
 
     fsrc = open(original, 'rb')
     with open(out, 'wb') as o:
         o.write(head)
         o.write(src.card_info)
-        o.write(b'\0' * (align(0x200 + len(src.card_info))
-                         - (0x200 + len(src.card_info))))
+        # Everything between the card-info header and the first partition is card
+        # pad, and a cartridge fills it with 0xFF, not zeros. Writing zeros here
+        # changed thousands of bytes of an otherwise untouched image.
         for L in layout:
-            o.seek(L['offset'])
+            # Seeking forward would leave a HOLE, and a hole reads back as zeros.
+            # That is not the same byte a card writes, and it happens whenever a
+            # replacement partition shrinks while a later one keeps its original
+            # offset. Fill every gap explicitly instead of letting the filesystem
+            # invent its contents.
+            if o.tell() < L['offset']:
+                _fill(o, L['offset'] - o.tell())
+            elif o.tell() > L['offset']:
+                raise SystemExit(
+                    f'partition {L["idx"]} would start at {L["offset"]:#x} but the '
+                    f'image is already {o.tell():#x} bytes long; partitions would '
+                    f'overlap')
             if L['src']:
-                written = _copy(open(L['src'], 'rb'), o, os.path.getsize(L['src']))
+                size = os.path.getsize(L['src'])
+                written = _copy(open(L['src'], 'rb'), o, size,
+                                f'{L["src"]} (partition {L["idx"]})')
             else:
                 fsrc.seek(L['orig']['offset'])
-                written = _copy(fsrc, o, L['orig']['size'])
+                written = _copy(fsrc, o, L['orig']['size'],
+                                f'{original} partition {L["idx"]}',
+                                at=L['orig']['offset'])
             pad = L['size'] - written
             if pad > 0:
-                o.write(b'\xff' * pad)
+                _fill(o, pad)
         # trailing pad to the declared card size
         o.seek(0, os.SEEK_END)
         if o.tell() < card:
@@ -118,15 +157,9 @@ def rebuild(original, replacements, out):
     return card
 
 
-def _copy(fsrc, out, total):
-    left = total
-    while left:
-        b = fsrc.read(min(CHUNK, left))
-        if not b:
-            break
-        out.write(b)
-        left -= len(b)
-    return total - left
+def _copy(fsrc, out, total, what, at=None):
+    """Shared counted copy - see copyx.copy_exact for why it is not a local loop."""
+    return copy_exact(fsrc, out, total, what, at=at)
 
 
 def _fill(out, n, byte=b'\xff'):
@@ -164,11 +197,12 @@ def extract_partition(path, idx, out):
     f = open(path, 'rb')
     f.seek(p['offset'])
     with open(out, 'wb') as o:
-        _copy(f, o, p['size'])
+        _copy(f, o, p['size'], f'{path} partition {idx}', at=p['offset'])
     return p['size']
 
 
 def sha256_partition(path, idx):
+    """Hash one partition, refusing a partial read rather than hashing a prefix."""
     n = Ncsd(path)
     p = n.partition(idx)
     f = open(path, 'rb')
@@ -178,7 +212,10 @@ def sha256_partition(path, idx):
     while left:
         b = f.read(min(CHUNK, left))
         if not b:
-            break
+            raise SystemExit(
+                f'{path} partition {idx}: declared {p["size"]} bytes from offset '
+                f'{p["offset"]} but the file ran out after {p["size"] - left}; '
+                f'refusing to report a hash of a partial partition')
         h.update(b)
         left -= len(b)
     return h.hexdigest()

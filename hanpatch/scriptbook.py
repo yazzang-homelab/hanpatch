@@ -44,8 +44,8 @@ CHAPTER_TITLES = {
 
 
 def load():
-    src = json.load(open(config.src_path()))
-    man = json.load(open(config.out('manifest.json')))
+    src = config.load_object(config.src_path(), 'the extracted source')
+    man = config.load_object(config.out('manifest.json'), 'the sealed manifest')
     return src, man['entries'], man['digest']
 
 

@@ -65,9 +65,8 @@ class CrimsonShroud(adapter.Adapter):
                 jp_by_key = {k: jp.entries[i][2] for i, k in enumerate(jp.keys)}
             rows = []
             for i, key in enumerate(en.keys):
-                row = {'key': key, 'en': en.entries[i][2]}
-                if key in jp_by_key:
-                    row['jp'] = jp_by_key[key]
+                row = {'key': key, 'en': en.entries[i][2],
+                       'jp': jp_by_key.get(key, '')}
                 rows.append(row)
             src[name] = rows
         os.makedirs(config.work(), exist_ok=True)
@@ -152,15 +151,7 @@ class CrimsonShroud(adapter.Adapter):
 
         work = config.work('verify')
         os.makedirs(work, exist_ok=True)
-        n = threeds.open_ncch(rom)
-        image = f'{work}/romfs.bin'
-        with open(image, 'wb') as o:
-            total = n.romfs_size * 0x200
-            pos = 0
-            while pos < total:
-                ln = min(1 << 22, total - pos)
-                o.write(n.romfs(pos, ln))
-                pos += ln
+        image = threeds.dump_romfs(rom, f'{work}/romfs.bin')
 
         try:
             arch = threeds.read_romfs_file(image, ARCHIVE)

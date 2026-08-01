@@ -39,3 +39,13 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
+
+# agent session state, not source
+.gjc/
+
+# A title profile carries that title's own terminology. The pipeline facts in it
+# (engine_wraps, budget, font_charset, register_default, hard_terms) are the reusable
+# part; the bulk `terms` map is an extract of a copyrighted script and is deliberately
+# NOT published here. `hanpatch` regenerates it from a ROM the operator already owns -
+# see the anchor procedure in skills/hanpatch. To publish your own, drop this line.
+/profiles/dq7.json

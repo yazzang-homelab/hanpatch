@@ -15,13 +15,17 @@ from hanpatch import wrap
 
 from hanpatch import config
 
+LAST_EXAMINED = 0
+
+
 TAG = re.compile(r'<[^>\n]*>')
 POLITE = re.compile(r'(니다|세요|십시오|습니까|나요)[.!?"\'”’)\]]*$')
 PLAIN = re.compile(r'(다|였다|한다|된다|이다)[.!?"\'”’)\]]*$')
 
 
 def main():
-    src = json.load(open(config.src_path()))
+    global LAST_EXAMINED
+    src = config.load_object(config.src_path(), 'the extracted source')
     tmdb = tm.load()
     gl = glossary.load()
     fails = defaultdict(list)
@@ -79,13 +83,23 @@ def main():
     pending = {}
     for p in glob.glob(config.out('review_*.json')):
         try:
-            pending.update(json.load(open(p)))
-        except (OSError, ValueError):
+            pending.update(config.load_object(p, 'the pending review shard'))
+        except (OSError, SystemExit):
             continue
     pending = {k: v for k, v in pending.items() if tm.lookup(tmdb, k) is None}
     print(f'=== review queue ===\n  unresolved: {len(pending)}')
     for k in list(pending)[:5]:
         print(f'      {k[:90]!r}')
+
+    print('=== term rendering consistency ===')
+    incons, collide, examined = term_rendering(src, tmdb)
+    print(f'  glossary runs present in translated source: {examined}')
+    print(f'  runs whose Korean form is missing from some renderings: {len(incons)}')
+    for term, have, miss in incons[:6]:
+        print(f'      {term!r}: present in {have}, absent in {miss} translated strings')
+    print(f'  Korean forms appearing where their source run is absent: {len(collide)}')
+    for term, n in collide[:6]:
+        print(f'      form mandated for {term!r} used in {n} unrelated strings')
 
     print('=== terminology drift ===')
     drift = terminology_drift(src, tmdb)
@@ -94,9 +108,23 @@ def main():
         print(f'      ratio={r:.2f} {a_[:70]!r}')
         print(f'                 {b_[:70]!r}')
 
+    # The release bar is not "the gate passed": a gate sees one string at a time, so a
+    # corpus can pass every string and still ship two Korean names for one thing. Both
+    # counts below are therefore REPORTED - and both are advisory, which is a measured
+    # decision, not caution. Making collisions fatal was tried and it broke the pinned
+    # reference project: 34 collisions on a fully released corpus, every one from a
+    # common-noun hard term whose Korean form legitimately occurs in strings that do not
+    # contain the exact English word, because English inflects and paraphrases
+    # ('Spellbook' mandated, its Korean rendering present in 102 other strings).
+    # `hard_terms` only means "classified proper nouns" where a title took the trouble
+    # to classify them; it is not a portable proxy for that. A title that wants these
+    # fatal must say so, not inherit it silently.
     hard_fail = (stats['untranslated'] + len(pending) +
                  sum(len(v) for k, v in fails.items() if k != 'register-mixed'))
+    print(f'  release bar: 0 untranslated, 0 unresolved reviews | advisory: '
+          f'{len(incons)} inconsistent renderings, {len(collide)} name collisions')
     print(f'\nHARD FAILURES: {hard_fail}')
+    LAST_EXAMINED = stats['total']
     return 1 if hard_fail else 0
 
 
@@ -108,6 +136,69 @@ def signature(en):
     s = re.sub(r"(?<=[^.!?\n] )[A-Z][a-z]+(?:'[a-z]+)?(?: [A-Z][a-z]+)*", 'X', s)
     s = re.sub(r'\s+', ' ', s).strip().lower()
     return s
+
+
+def term_rendering(src, tmdb):
+    """Report, do not gate: where does one source run render two ways?
+
+    `terminology_drift` below cannot see this on a Japanese source. It groups by
+    `signature(en)`, and signature folds digits and LATIN capitalised runs - a Japanese
+    string has no Latin capitals, so the proper-noun folding is a no-op and the grouping
+    degenerates to near-exact template matching. Paraphrases and 'the same rare name
+    rendered two ways in two unrelated sentences' pass it silently.
+
+    This is the safety net for the part the glossary gate does not cover. Only the terms
+    declared `hard_terms` are enforced at translation time, deliberately - enforcing a
+    substring on a common noun false-fails fluent Korean, which is pro-drop and
+    rephrases. That leaves every SOFT term with no signal at all. Counting is the right
+    instrument for those: a report cannot false-fail a correct translation, and it
+    cannot let drift through unseen either.
+
+    Two findings over the translated pairs:
+      - inconsistency, for EVERY glossary run: the run appears in N translated source
+        strings and its declared Korean form appears in only some of their translations.
+      - collision, for PROPER NOUNS ONLY: the Korean form declared for one run turns up
+        in translations whose source does not contain that run, i.e. one Korean name
+        serving two things. Scoped deliberately - measured on 126 translated pairs the
+        unscoped version reported 34 collisions and every one was a common noun, because
+        the Korean rendering of a word like 'work' legitimately occurs everywhere. On a
+        proper noun the same signal is real. `hard_terms` is the classified proper-noun
+        set, so it is the scope; widening it turns the report into noise nobody reads.
+    """
+    gl = glossary.load()
+    pairs = []
+    if not gl:
+        raise SystemExit('TERM REPORT REFUSED: the glossary is empty, so this would '
+                         'examine nothing and report clean')
+    for family, items in src.items():
+        for it in items:
+            en = it['en']
+            if not en.strip():
+                continue
+            ko = tm.lookup(tmdb, en)
+            if ko:
+                pairs.append((en, ko.replace('\n', ' ')))
+    present = defaultdict(lambda: [0, 0])       # term -> [rendered with, rendered without]
+    collide = defaultdict(int)
+    proper = set(glossary.hard())
+    for term, koterm in gl.items():
+        if not term or not koterm:
+            continue
+        for en, ko in pairs:
+            in_src = term in en
+            in_ko = koterm in ko
+            if in_src:
+                present[term][0 if in_ko else 1] += 1
+            elif in_ko and term in proper:
+                collide[term] += 1
+    incons = sorted(((t, v[0], v[1]) for t, v in present.items() if v[0] and v[1]),
+                    key=lambda r: -r[2])
+    examined = sum(1 for v in present.values() if v[0] or v[1])
+    if pairs and not examined:
+        # Reporting clean after examining zero runs is the same 'verified nothing
+        # therefore fine' shape the superblock check refuses. Say so instead.
+        print('  note: no glossary run occurs in any translated source string')
+    return incons, sorted(collide.items(), key=lambda r: -r[1]), examined
 
 
 def terminology_drift(src, tmdb, ko_sim=0.60):

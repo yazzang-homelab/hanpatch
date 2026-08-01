@@ -29,16 +29,24 @@ def build(src_path=None):
     src = json.load(open(src_path))
     cap = {}
     for family, items in src.items():
-        budget = wrap.BUDGET.get(family, wrap.BUDGET['default'])
+        budget = wrap.budget_for(family)
         for it in items:
             en = it['en']
-            if not en.strip() or wrap.is_freeform(en):
+            # Same predicate as the layout gate: a title whose container stores
+            # one display line per row must still DERIVE a capacity, or the gate
+            # it feeds has nothing measured to enforce.
+            if not en.strip() or wrap.engine_lays_out(en):
                 continue
+            g = group(family, it['key'])
             pages = wrap.pages(wrap.rewrap(en, budget))
             n = max(pages) if pages else 0
-            g = group(family, it['key'])
             cap[g] = max(cap.get(g, 0), n)
     json.dump(cap, open(OUT(), 'w'), indent=1, sort_keys=True)
+    # A process that already read the old table keeps it cached, and the new
+    # precedence would silently degrade to the profile value. Gate order hides
+    # this today and the reference title hides it further, because its profile
+    # equals its derived maxima - it will bite the first title where they differ.
+    wrap.invalidate_capacity()
     return cap
 
 

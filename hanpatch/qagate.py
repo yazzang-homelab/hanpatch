@@ -18,6 +18,9 @@ from hanpatch import tm
 
 from hanpatch import config
 
+LAST_EXAMINED = 0
+
+
 def MANIFEST():
     return config.out('manifest.json')
 def WAIVERS():
@@ -30,7 +33,8 @@ JUDGES = set(qamod.JUDGES)
 WAIVER_CATEGORIES = {'JP_NAMING', 'ELEMENT_TERMS', 'OFFICIAL_HW_TERM',
                      'GAME_TERM', 'EN_SOURCE_PRIORITY', 'SOURCE_BUG',
                      'TEMPLATE', 'JUDGE_ERROR', 'JP_CONVENTION',
-                     'SOURCE_PUNCTUATION', 'INNER_MONOLOGUE'}
+                     'SOURCE_PUNCTUATION', 'INNER_MONOLOGUE',
+                     'JP_SOURCE_AMBIGUITY', 'DECLARED_REGISTER_CONFLICT'}
 
 
 def producers():
@@ -40,7 +44,7 @@ def producers():
 def source_of(it):
     en = it['en']
     if tm.is_skip(en, it['key']) or not en.strip():
-        return it.get('jp', en)
+        return it.get('jp') or en
     return en
 
 
@@ -117,11 +121,13 @@ def waiver_problem(w, mkey, pk=None, man=None, by_key=None):
 
 def validate(man=None, quiet=True):
     """Side-effect-free validation used both by the gate and by the packer."""
+    global LAST_EXAMINED
     if man is None:
-        man = json.load(open(MANIFEST()))['entries']
-    src = json.load(open(config.src_path()))
+        man = config.load_object(MANIFEST(), 'the sealed manifest')['entries']
+    src = config.load_object(config.src_path(), 'the extracted source')
     qa = qamod.load()
-    waivers = json.load(open(WAIVERS())) if os.path.exists(WAIVERS()) else {}
+    waivers = (config.load_object(WAIVERS(), 'the QA waiver file')
+               if os.path.exists(WAIVERS()) else {})
     prov = producers()
     by_key = {f'{fam}/{it["key"]}': it
               for fam, items in src.items() for it in items}
@@ -147,6 +153,7 @@ def validate(man=None, quiet=True):
             continue
         used.add(pk)
     stale = sorted(set(waivers) - used)
+    LAST_EXAMINED = len(man)
     return blocked, bad_waivers, stale
 
 
@@ -167,8 +174,8 @@ def approved_digest():
     if not os.path.exists(APPROVAL()):
         return None
     try:
-        return json.load(open(APPROVAL())).get('digest')
-    except (OSError, ValueError):
+        return config.load_object(APPROVAL(), 'the approval token').get('digest')
+    except (OSError, SystemExit):
         return None
 
 
@@ -176,11 +183,12 @@ def main():
     if not os.path.exists(MANIFEST()):
         print('no manifest: run mtl/manifest.py first')
         return 1
-    doc = json.load(open(MANIFEST()))
+    doc = config.load_object(MANIFEST(), 'the sealed manifest')
     man = doc['entries']
-    src = json.load(open(config.src_path()))
+    src = config.load_object(config.src_path(), 'the extracted source')
     qa = qamod.load()
-    waivers = json.load(open(WAIVERS())) if os.path.exists(WAIVERS()) else {}
+    waivers = (config.load_object(WAIVERS(), 'the QA waiver file')
+               if os.path.exists(WAIVERS()) else {})
     prov = producers()
     by_key = {f'{fam}/{it["key"]}': it
               for fam, items in src.items() for it in items}
@@ -237,13 +245,30 @@ def main():
                 print(f'      {r}')
     hard = len(blocked) + len(bad_waivers) + len(stale)
     print(f'\nQA HARD FAILURES: {hard}')
-    if hard == 0:
-        approve(doc['digest'], len(man), len(used_waivers))
-        print(f'approved manifest digest -> {APPROVAL()}')
-    else:
+    # REPORT ONLY. This entry point runs the panel in isolation, without the five
+    # gates before it, without the per-gate input floors and without re-deriving
+    # the sealed digest, so it must not mint a release-valid approval: that would
+    # be a second, weaker authority for the same artifact. A clean panel here is
+    # evidence for the operator; `hanpatch gates` is what approves. A dirty panel
+    # still revokes, because a stale approval must never outlive a failed panel.
+    if hard:
         revoke()
     return 1 if hard else 0
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # A FAILURE here must leave no approval standing: `release.create` trusts the
+    # token plus a digest match without re-running the panel, so an interrupt or
+    # an unreadable input would otherwise make a stale approval releasable.
+    # A CLEAN exit must NOT revoke. `sys.exit(0)` is itself a BaseException, so
+    # catching it blindly let this report-only panel delete the valid token that
+    # `hanpatch gates` had legitimately written.
+    try:
+        sys.exit(main())
+    except SystemExit as exc:
+        if exc.code:
+            revoke()
+        raise
+    except BaseException:
+        revoke()
+        raise

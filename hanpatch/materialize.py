@@ -16,22 +16,27 @@ from hanpatch import translate
 
 from hanpatch import config
 
+LAST_EXAMINED = 0
+
+
 def OUT():
     return config.out('tm_derived.json')
 
 
 def main():
-    src = json.load(open(config.src_path()))
+    global LAST_EXAMINED
+    src = config.load_object(config.src_path(), 'the extracted source')
     base = {}
     if os.path.exists(tm.TM_PATH()):
-        base.update(json.load(open(tm.TM_PATH())))
+        base.update(config.load_object(tm.TM_PATH(), 'the primary translation memory'))
     import glob
     for p in sorted(glob.glob(config.out('tm_*.json'))):
         if p.endswith('tm_derived.json'):
             continue
-        base.update(json.load(open(p)))
+        base.update(config.load_object(p, 'the translation memory shard'))
     gl = glossary.load()
     derived, bad = {}, []
+    examined = 0
     for family, items in src.items():
         for it in items:
             en = it['en']
@@ -40,6 +45,7 @@ def main():
             ko = tm.lookup(base, en)
             if ko is None:
                 continue
+            examined += 1
             ko2, probs = translate.check(
                 en, ko, glossary.relevant(gl, [en], family), family,
                 capmod.group(family, it['key']))
@@ -52,6 +58,7 @@ def main():
     for k, p in bad[:20]:
         print(f'  INVALID {k}: {p}')
     print(f'invalid derived entries: {len(bad)}')
+    LAST_EXAMINED = examined
     return 1 if bad else 0
 
 

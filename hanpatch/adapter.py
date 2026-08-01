@@ -4,7 +4,8 @@ The translation and QA core never touches a ROM.  It reads and writes exactly
 two normalised documents, and an adapter is the only code that knows how a
 particular title stores its text:
 
-    work/text_src.json      {family: [{key, en, jp?, note?}, ...]}
+    work/text_src.json      {family: [{key, en, jp, note?}, ...]}
+    `jp` is REQUIRED-PRESENT and may be an empty string.
     work/<lang>/manifest.json
                             {"digest": hex, "entries": {family/key: text}}
 

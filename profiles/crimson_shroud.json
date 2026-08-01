@@ -1,5 +1,5 @@
 {
- "_comment": "Crimson Shroud (3DS) Korean reference profile. Localisation policy: prose follows the English release; item/spell/weapon names transliterate the Japanese original; character names follow English. \"terms\" is a proper-noun and fixed-UI naming table — it is deliberately not the game script, which this repository never ships.",
+ "_comment": "Crimson Shroud (3DS) Korean profile. Prose follows the English release; item/spell/weapon names transliterate the Japanese original. `hard_break` is empty: only `\\n` breaks a line, `<br>` advances the message.",
  "budget": {
   "battle": 344,
   "default": 384,
@@ -14,6 +14,7 @@
   "stage1": 7,
   "system": 2
  },
+ "engine_wraps": true,
  "font_out": [
   "work/ko/font_text.bcfnt",
   "work/ko/font_system.bcfnt"
@@ -26,9 +27,7 @@
   "extracted/fa/font/en/font_text.bcfnt",
   "extracted/fa/font/en/font_system.bcfnt"
  ],
- "hard_break": [
-  "<br>"
- ],
+ "hard_break": [],
  "hard_families": [
   "region"
  ],
@@ -234,5 +233,54 @@
   "Unraiseable",
   "Vocalize",
   "Wither"
- ]
+ ],
+ "font_sheet": {
+  "font_text": [
+   256,
+   256
+  ],
+  "font_system": [
+   256,
+   256
+  ]
+ },
+ "font_shade": {
+  "font_text": [
+   15,
+   9,
+   8,
+   7,
+   6,
+   5,
+   3,
+   3,
+   3,
+   4,
+   4,
+   6,
+   7,
+   10,
+   12,
+   15
+  ],
+  "font_system": [
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15,
+   15
+  ]
+ },
+ "font_charset": "ksx1001"
 }
