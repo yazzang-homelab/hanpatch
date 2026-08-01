@@ -294,14 +294,25 @@ def strip_source_only(text):
 def nl(s):
     return s.count('\n')
 
+
 def dq7_delimiter_problems(text):
-    """Reject malformed or undeclared DQ7 delimiters without using ``tag_pattern``."""
+    """Reject malformed or undeclared DQ7 delimiters without using ``tag_pattern``.
+
+    A measured title may declare a literal delimiter when the container stores one next to
+    a real token (DQ7 has one source row with an extra closing brace after a substitution).
+    The declaration is explicit and applies to source and target; all other raw delimiters
+    remain errors.
+    """
     if config.cfg().get('adapter') != 'dq7':
         return []
+    literal = set(config.prof('literal_delimiters') or ())
     declared = MOVABLE_TAGS | set(config.prof('control_tags') or ())
     position = 0
     while position < len(text):
         char = text[position]
+        if char in literal:
+            position += 1
+            continue
         if char not in '<>{}':
             position += 1
             continue

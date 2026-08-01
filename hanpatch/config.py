@@ -39,7 +39,7 @@ _OBJECT_KEYS = (
     'font_ttf', 'font_sheet', 'font_shade','terms', 'register', 'budget', 'capacity', 'gate_thresholds')
 _LIST_KEYS = ('models', 'name_keys', 'ui_only_families', 'ui_only_terms', 'hard_families',
               'hard_terms', 'kanji_allowlist', 'hard_break', 'page_break',
-              'movable_tags', 'control_tags', 'font_src', 'font_out')
+              'movable_tags', 'control_tags', 'literal_delimiters', 'font_src', 'font_out')
 # `skip_families`, `skip_key_patterns` and `skip_value_patterns` are deliberately
 # NOT validated: nothing reads them yet (`tm.is_skip` still carries the policy in
 # code), and schema-validating a key that does nothing promises the operator it
@@ -238,6 +238,9 @@ DEFAULT_PROFILE = {
     # other annotations meaningful only in the source language. Absent means the title has
     # none; it never means "match anything".
     'source_only_pattern': '',
+    # Delimiters that are literal source content for this container, not markup. An empty
+    # list is the safe default; a title must measure and declare an exception explicitly.
+    'literal_delimiters': [],
     # glossary scoping
     # Optional per-title model pool. Absent means the registry decides by role.
     'models': [],

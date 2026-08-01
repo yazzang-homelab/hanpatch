@@ -1964,6 +1964,7 @@ try:
                 'engine_wraps': False, 'register_default': 'plain',
                 'tag_pattern': r'<[^>\n]*>|\{[A-Z0-9_]+\}',
                 'source_only_pattern': r'\{[0-9]+[^}\n]*\}',
+                'literal_delimiters': ['}'],
                 'movable_tags': ['{HERO}'], 'control_tags': ['<NOTICE>']}
 
     json.dump(_so_prof, open(os.path.join(_so_root, 'profiles', 'p.json'), 'w'))
@@ -1971,6 +1972,8 @@ try:
     _en = '\u77f3{1\u3044\u3057}\u3092{HERO}\u304c\u62bc\u3059'
     case('the recogniser matches a source-only token, so it is not a stray delimiter',
          tr.dq7_delimiter_problems(_en) == [])
+    case('a measured literal delimiter is accepted',
+         tr.dq7_delimiter_problems('{HERO}}') == [])
 
     case('a source-only token is excluded from the tag multiset',
          tr.tags(_en) == ['{HERO}'])
