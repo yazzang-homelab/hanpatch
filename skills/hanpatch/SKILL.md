@@ -214,6 +214,24 @@ Never delete a lane from the accepted-identity set to retire it. Verdicts alread
 by that lane are still true; separate the identity set from the runtime pool and change only
 the pool.
 
+### Supervising a run nobody is watching
+
+A supervisor exists to notice that work stopped. It must therefore be harder to kill than
+the work it supervises. Two rules follow from losing one here.
+
+Catch the exits, not just the exceptions. Loaders that call `SystemExit` on a malformed
+document are right for a CLI and fatal inside a supervisor: one transient bad read of a
+large state file ended supervision while the repair loop kept running unobserved. A
+supervisor retries and reports; it never treats a read failure as a reason to stop.
+
+Rewrite large accumulating state atomically AND durably. A verdict file is hours of paid
+work rewritten after every batch; rename-without-flush leaves a window where a crash loses
+verdicts the log already reported as recorded.
+
+Repeated `SIGSEGV` from unrelated binaries (the interpreter and a vendor CLI both) is a
+machine-stability signal, not a bug in the run. Lower concurrency and record the crashed
+units so the next pass retries them; do not read the crash as evidence about the corpus.
+
 ## When a gate fails
 
 Fix the translation. Do not widen the gate, do not add a waiver to make a red

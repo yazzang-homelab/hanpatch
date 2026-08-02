@@ -126,9 +126,18 @@ def load():
 
 
 def save(doc, lock):
+    """Replace the verdict file atomically and durably.
+
+    A panel run is hours of paid work held in one document, and it is rewritten after every
+    batch. Renaming without flushing leaves the window where a crash loses verdicts that the
+    log already reported as recorded.
+    """
     with lock:
         tmp = f'{QA_PATH()}.{os.getpid()}.tmp'
-        json.dump(doc, open(tmp, 'w'), ensure_ascii=False, indent=1, sort_keys=True)
+        with open(tmp, 'w') as fh:
+            json.dump(doc, fh, ensure_ascii=False, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, QA_PATH())
 
 
