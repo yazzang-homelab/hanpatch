@@ -60,6 +60,9 @@ JUDGES = ['codex1:gpt-5.6-luna',
           'nimproxy:meta/llama-3.3-70b-instruct',
           'opencode:mimo-v2.5-free',
           'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
+# Runtime uses only the lanes measured to return structured verdicts quickly. Keep the full
+# list above as the accepted identity set so historical verdicts remain valid.
+ACTIVE_JUDGES = JUDGES[:4]
 
 SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
 각 항목의 %(source_name)s 원문과 한국어 번역을 비교해 평가한다.
@@ -147,7 +150,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     providers.load_dotenv()
-    pool = [p for p in (providers.make(s) for s in JUDGES) if p]
+    pool = [p for p in (providers.make(s) for s in ACTIVE_JUDGES) if p]
     src = config.load_object(config.src_path(), 'the extracted source')
     doc = load()
     prov_of = producers()
