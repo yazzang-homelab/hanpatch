@@ -1921,6 +1921,21 @@ case('numeric spans are not mistaken for copied Latin words',
 case('an embedded polite marker without a final ending is undecided',
      _reg.of_korean('이쪽으로 오세요. 그리고 그때') is None)
 
+print('== the QA repair pass reads the verdict file it actually has ==')
+from hanpatch import run as _runmod
+_qf = {'aaaa': [{'d': 'defect', 'a': 2, 'f': 3, 'en': 'src1', 'ko': 'ko1', 'r': '오역'},
+                {'d': 'pass', 'a': 5, 'f': 5, 'en': 'src1', 'ko': 'ko1', 'r': ''}],
+       'bbbb': [{'d': 'defect', 'a': 2, 'f': 2, 'en': 'src2', 'ko': 'stale', 'r': '비문'}]}
+_qr = _runmod.qa_reasons(_qf, {'src1': 'ko1', 'src2': 'ko2'}, 4)
+case('a flagged pair is keyed by source, not by the pair hash',
+     list(_qr) == ['src1'] and _qr['src1'] == ['오역'])
+case('a verdict about a value no longer shipped is not repair work',
+     'src2' not in _qr)
+case('a low-scoring pass is still repair work',
+     list(_runmod.qa_reasons({'c': [{'d': 'pass', 'a': 3, 'f': 5,
+                                     'en': 'src1', 'ko': 'ko1', 'r': 'x'}]},
+                             {'src1': 'ko1'}, 4)) == ['src1'])
+
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')
 _sp_prev = config.root()

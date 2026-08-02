@@ -69,6 +69,27 @@ def save_json_locked(path, updates, removals=(), what='the translation state sha
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
+def qa_reasons(flagged, merged, floor):
+    """source -> actionable judge complaints, from the `pair_key`-keyed QA review.
+
+    A pair is listed when ANY of its records is flagged, so the passing records in the
+    same list are not work. A complaint is dropped once the value it judged is no longer
+    the shipped one, because a later repair already answered it.
+    """
+    reasons = {}
+    for recs in flagged.values():
+        for rec in recs if isinstance(recs, list) else ():
+            if not isinstance(rec, dict):
+                continue
+            if (rec.get('d') == 'pass'
+                    and min(rec.get('a', 0), rec.get('f', 0)) >= floor):
+                continue
+            en = rec.get('en')
+            if not en or tm.lookup(merged, en) != rec.get('ko'):
+                continue
+            reasons.setdefault(en, []).append(str(rec.get('r', '')).strip())
+    return reasons
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--family', required=True)
@@ -91,17 +112,19 @@ def main(argv=None):
         pool = providers.build_pool(declared or None)
     src = config.load_object(config.src_path(), 'the extracted source')
     if args.qafail:
+        from hanpatch import qagate
         flagged = config.load_object(config.out('qa_flagged.json'),
                                      'the QA flagged review')
+        reasons = qa_reasons(flagged, tm.load(), qagate.FLOOR)
         todo = []
         seen = set()
         for it in src[args.family]:
             en = it['en']
-            if en in flagged and en not in seen:
+            if en in reasons and en not in seen:
                 seen.add(en)
                 todo.append({'en': en, 'jp': it.get('jp', ''),
                              'group': capmod.group(args.family, it['key']),
-                             'qa': flagged[en]['r'],
+                             'qa': '; '.join(r for r in reasons[en] if r)[:300],
                              'refs': [f"{args.family}:{it['key']}"]})
     elif args.refail:
         merged = tm.load()
