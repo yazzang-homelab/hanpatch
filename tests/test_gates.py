@@ -1942,6 +1942,20 @@ case('shipped values come from the manifest, not the raw memory',
 case('a source with no manifest entry is not shippable and carries no verdict',
      _runmod.shipped_values({'f': [{'en': 'src1', 'key': 'k1'}]}, {}) == {})
 
+print('== the judge panel is scaled by identity, not by spend ==')
+case('every Codex account on the machine is a judge identity',
+     _qamod.codex_judges()
+     == [f'codex{a}:{_qamod.CODEX_MODEL}' for a in _prov.codex_accounts()])
+case('the runtime panel is Codex-only while any account exists',
+     (_qamod.active_judges() == _qamod.codex_judges())
+     if _prov.codex_accounts() else
+     (_qamod.active_judges() == _qamod.LEGACY_JUDGES))
+case('a lane that recorded a verdict stays an accepted identity',
+     set(_qamod.LEGACY_JUDGES) <= set(_qamod.JUDGES)
+     and set(_qamod.codex_judges()) <= set(_qamod.JUDGES))
+case('the panel needs one more lane than the release rule requires',
+     qagate.REQUIRED_JUDGES + 1 <= len(_qamod.JUDGES))
+
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')
 _sp_prev = config.root()

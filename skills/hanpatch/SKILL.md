@@ -194,6 +194,26 @@ Panels over a large corpus run for hours. Persist verdicts per batch so an inter
 resumes from what it proved, and never restart a panel from zero to "be safe": re-judging
 settled pairs spends the budget that the unjudged ones need.
 
+### Choosing panel lanes
+
+Panel cost is *corpus x panel size*, not corpus. A per-token lane that looks cheap for one
+translation pass is multiplied by the number of required verdicts and by every repair cycle,
+so lane choice for a panel is a cost decision before it is a quality one. Prefer flat-rate
+accounts for judging and keep metered lanes for translation and repair, where each row is
+paid for once.
+
+Scale the panel by *identity*, not by spend: discover the accounts that exist rather than
+hardcoding a list, because a panel that ignores a present account silently caps itself.
+
+A judge may not score its own output, so a panel with exactly as many lanes as the release
+rule requires starves every pair whose producer is one of those lanes. Require at least one
+more lane than the rule, and refuse to start otherwise — the alternative is discovering it
+hours later as batches that report "unjudged".
+
+Never delete a lane from the accepted-identity set to retire it. Verdicts already recorded
+by that lane are still true; separate the identity set from the runtime pool and change only
+the pool.
+
 ## When a gate fails
 
 Fix the translation. Do not widen the gate, do not add a waiver to make a red

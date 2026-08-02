@@ -44,25 +44,37 @@ def producers():
         except (OSError, SystemExit):
             continue
     return out
-# QA order starts with measured high-throughput independent lanes. The Codex accounts are
-# distinct judge identities and the paid DeepSeek Pro model is distinct from the Flash
-# translation lane. The older free rotators remain fallbacks, but several were observed
-# returning 410/400 or parking under concurrent QA and must not be the only path.
-JUDGES = ['codex1:gpt-5.6-luna',
-          'codex2:gpt-5.6-luna',
-          'codex3:gpt-5.6-luna',
-          'deepseek:deepseek-v4-pro',
-          'nimproxy:deepseek-ai/deepseek-v4-pro',
-          'opencode:nemotron-3-ultra-free',
-          'nimproxy:qwen/qwen3-next-80b-a3b-instruct',
-          'groq:openai/gpt-oss-120b',
-          'nimproxy:nvidia/nemotron-3-super-120b-a12b',
-          'nimproxy:meta/llama-3.3-70b-instruct',
-          'opencode:mimo-v2.5-free',
-          'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
-# Runtime uses only the lanes measured to return structured verdicts quickly. Keep the full
-# list above as the accepted identity set so historical verdicts remain valid.
-ACTIVE_JUDGES = JUDGES[:4]
+# Panel identity set. A verdict recorded by any of these remains valid forever, so entries
+# are never removed - only the RUNTIME pool below changes.
+CODEX_MODEL = 'gpt-5.6-luna'
+LEGACY_JUDGES = ['deepseek:deepseek-v4-pro',
+                 'nimproxy:deepseek-ai/deepseek-v4-pro',
+                 'opencode:nemotron-3-ultra-free',
+                 'nimproxy:qwen/qwen3-next-80b-a3b-instruct',
+                 'groq:openai/gpt-oss-120b',
+                 'nimproxy:nvidia/nemotron-3-super-120b-a12b',
+                 'nimproxy:meta/llama-3.3-70b-instruct',
+                 'opencode:mimo-v2.5-free',
+                 'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
+
+
+def codex_judges():
+    return [f'codex{a}:{CODEX_MODEL}' for a in providers.codex_accounts()]
+
+
+JUDGES = codex_judges() + LEGACY_JUDGES
+
+
+def active_judges():
+    """The lanes a panel run may call.
+
+    Panel cost is corpus x panel size, not corpus: a per-token lane that is affordable for
+    one translation pass is not affordable for judging every shipped pair at least twice.
+    The Codex accounts are flat-rate and are independent identities, so the panel widens by
+    adding an account rather than by spending more. Everything else stays in the identity
+    set for verdicts already recorded, and is used only when no Codex account exists.
+    """
+    return codex_judges() or LEGACY_JUDGES
 
 SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
 각 항목의 %(source_name)s 원문과 한국어 번역을 비교해 평가한다.
@@ -150,7 +162,17 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     providers.load_dotenv()
-    pool = [p for p in (providers.make(s) for s in ACTIVE_JUDGES) if p]
+    pool = [p for p in (providers.make(s) for s in active_judges()) if p]
+    # A judge may not score its own output, so a panel of exactly REQUIRED_JUDGES starves
+    # every pair whose producer is one of them. Refuse to run a pool that cannot satisfy
+    # the release rule for such a pair instead of discovering it as unjudged batches hours
+    # later.
+    from hanpatch import qagate
+    if len(pool) < qagate.REQUIRED_JUDGES + 1:
+        raise SystemExit(
+            f'judge pool too small: {len(pool)} lane(s) available, '
+            f'{qagate.REQUIRED_JUDGES + 1} needed so a pair whose producer is a judge can '
+            f'still reach {qagate.REQUIRED_JUDGES} distinct verdicts')
     src = config.load_object(config.src_path(), 'the extracted source')
     doc = load()
     prov_of = producers()

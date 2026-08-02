@@ -329,11 +329,29 @@ class CodexProvider:
         return self.reply_of(out)
 
 
+CODEX_ACCOUNTS_DIR = '/root/.codex-accounts'
+
+
+def codex_accounts():
+    """Every Codex account present on this machine, in stable order.
+
+    Discovery rather than a hardcoded list: an account is an independent identity, so adding
+    one is the only way to widen a judge panel that must not reuse a judge, and a panel that
+    ignores a present account silently caps itself.
+    """
+    try:
+        names = os.listdir(CODEX_ACCOUNTS_DIR)
+    except OSError:
+        return []
+    return sorted(n for n in names
+                  if os.path.isdir(os.path.join(CODEX_ACCOUNTS_DIR, n)))
+
+
 def make(spec, **kw):
     prov, model = spec.split(':', 1)
     if prov.startswith('codex'):
         acct = prov[len('codex'):] or '1'
-        home = f'/root/.codex-accounts/{acct}'
+        home = os.path.join(CODEX_ACCOUNTS_DIR, acct)
         if not os.path.isdir(home):
             return None
         return CodexProvider(home, model, **kw)
