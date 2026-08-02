@@ -230,6 +230,17 @@ on a malformed document are right for a CLI and fatal inside a supervisor. One t
 read of a 40MB verdict file ended supervision here while the repair loop kept running
 unobserved; after the fix the supervisor detected a dead loop and restarted it on its own.
 
+**A supervisor cannot supervise its own death.** In-process robustness only covers failures
+the process survives. This one was killed outright with no log line, and the repair cycle
+then sat dead for five hours while every artifact on disk still looked healthy and the last
+log line still read `repair=up`. Run the supervisor under an out-of-process manager with
+automatic restart, and verify the restart by killing it — not by reading the config.
+
+**A hung unit must not end the pass.** A per-unit timeout that raises out of the loop turns
+one stuck family into a dead run. Catch it, record the unit, and continue: the work is still
+flagged, so the next pass retries it. Size the timeout against the measured unit, not against
+the whole job — an hour-long limit on a twenty-second unit is a stall, not a safety margin.
+
 Repeated `SIGSEGV` from unrelated binaries — the interpreter and a vendor CLI both — is a
 machine-stability signal, not evidence about the corpus. Lower concurrency, record the
 crashed units, and let the next pass retry them.
