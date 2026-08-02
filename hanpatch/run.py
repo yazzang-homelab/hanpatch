@@ -137,6 +137,11 @@ def main(argv=None):
                                      'the QA flagged review')
         man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
         reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR)
+        # Make a no-op visible. This pass once matched nothing because the review file is
+        # keyed by pair, not by source, and it still reported success per family; the two
+        # counts side by side turn that class of silent failure into something a log shows.
+        print(f'qa review: {len(flagged)} flagged pairs, '
+              f'{len(reasons)} sources actionable', flush=True)
         todo = []
         seen = set()
         for it in src[args.family]:
