@@ -246,11 +246,14 @@ def main(argv=None):
             if not batch:
                 return
             prov = pool[(i + attempt) % len(pool)]
-            # never let the model that produced a translation judge it, and
-            # never let the same judge score one pair twice
-            if any(r[4] and r[4] == prov.id for r in batch):
-                continue
-            if any(prov.id in r[5] for r in batch):
+            # Never let the model that produced a translation judge it, and never let the
+            # same judge score one pair twice. Both exclusions are per ROW: dropping the
+            # whole batch when any one row is ineligible starves a small pool, because a
+            # mixed batch then excludes every lane and the stragglers never reach the
+            # required panel size no matter how many passes run.
+            batch = [r for r in pending
+                     if not (r[4] and r[4] == prov.id) and prov.id not in r[5]]
+            if not batch:
                 continue
             try:
                 sub = glossary.relevant(glossary.load(), [r[0] for r in batch])
@@ -282,8 +285,10 @@ def main(argv=None):
                            'r': str(v.get('r', ''))[:160],
                            'judge': prov.id, 'en': en, 'ko': ko}
             if out:
+                # Keep the rows this lane was not allowed to judge: `batch` is now the
+                # eligible subset, so filtering it would silently drop them from the run.
                 judged = {r[3] for r in batch if r[3] in out}
-                pending = [r for r in batch if r[3] not in judged]
+                pending = [r for r in pending if r[3] not in judged]
                 with lock:
                     for k, v in out.items():
                         prev = [r for r in doc.get(k, [])
