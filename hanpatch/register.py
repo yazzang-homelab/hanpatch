@@ -176,7 +176,7 @@ def of_korean(ko):
     # independent translators produced the same mixed shape.
     if polite and plain:
         return None
-    if polite:
+    if tail_polite:
         return POLITE
     return PLAIN if plain else None
 

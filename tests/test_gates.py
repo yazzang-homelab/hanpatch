@@ -1918,6 +1918,8 @@ case('mixed target evidence does not invent a whole-record register',
      and _reg.divergence('もう行くのだ。', '이쪽으로 오세요. 이제 간다') is None)
 case('numeric spans are not mistaken for copied Latin words',
      tr.copied_spans('10 10 1000', '10 10 1000') == [])
+case('an embedded polite marker without a final ending is undecided',
+     _reg.of_korean('이쪽으로 오세요. 그리고 그때') is None)
 
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')
