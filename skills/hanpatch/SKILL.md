@@ -167,34 +167,7 @@ not make the delimiter checker permissive globally. The default is an empty list
 same declared exception is checked on target output. A single observed extra brace in one
 DQ7 record was enough to block the last row until this fact was recorded.
 
-## The QA repair cycle, and the two ways it silently does nothing
-
-A judge verdict is about one exact pair: the source and *the value that ships*. Two failure
-modes follow, and both look like success.
-
-First, **freshness must be decided against the sealed artifact**, not the upstream working
-store. A build that resolves overrides or post-processes text makes the sealed value differ
-from the raw one, so comparing verdicts against the raw store discards real complaints as
-stale. Measure it: print the flagged count and the actionable count together. If almost
-everything vanishes between them, that is a key-shape or authority bug, not progress. In
-this corpus the wrong authority left 449 of 13788 complaints actionable and would have
-reported the repair pass complete.
-
-Second, **repair, reseal and re-judge are one cycle**. The panel only ever sees the sealed
-artifact, so a repaired value that was never resealed is invisible: the next pass re-reads
-the old text and reproduces the same complaints forever. Close the cycle in the runner, not
-in an operator's memory.
-
-A repaired value is a NEW pair and therefore arrives with no verdicts. That is the property
-that makes the loop honest — an unhelpful repair is judged again from scratch rather than
-inheriting the old complaint — and it is also why a pass that repairs nothing must stop and
-escalate instead of retrying an identical prompt.
-
-Panels over a large corpus run for hours. Persist verdicts per batch so an interrupted run
-resumes from what it proved, and never restart a panel from zero to "be safe": re-judging
-settled pairs spends the budget that the unjudged ones need.
-
-### Choosing panel lanes
+## Choosing judge panel lanes
 
 Panel cost is *corpus x panel size*, not corpus. A per-token lane that looks cheap for one
 translation pass is multiplied by the number of required verdicts and by every repair cycle,
@@ -213,24 +186,6 @@ hours later as batches that report "unjudged".
 Never delete a lane from the accepted-identity set to retire it. Verdicts already recorded
 by that lane are still true; separate the identity set from the runtime pool and change only
 the pool.
-
-### Supervising a run nobody is watching
-
-A supervisor exists to notice that work stopped. It must therefore be harder to kill than
-the work it supervises. Two rules follow from losing one here.
-
-Catch the exits, not just the exceptions. Loaders that call `SystemExit` on a malformed
-document are right for a CLI and fatal inside a supervisor: one transient bad read of a
-large state file ended supervision while the repair loop kept running unobserved. A
-supervisor retries and reports; it never treats a read failure as a reason to stop.
-
-Rewrite large accumulating state atomically AND durably. A verdict file is hours of paid
-work rewritten after every batch; rename-without-flush leaves a window where a crash loses
-verdicts the log already reported as recorded.
-
-Repeated `SIGSEGV` from unrelated binaries (the interpreter and a vendor CLI both) is a
-machine-stability signal, not a bug in the run. Lower concurrency and record the crashed
-units so the next pass retries them; do not read the crash as evidence about the corpus.
 
 ## When a gate fails
 
