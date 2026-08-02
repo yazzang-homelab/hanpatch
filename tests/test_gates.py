@@ -1968,6 +1968,9 @@ case('a title without the reference scene grammar still gets sections',
      list(_sb_secs) == ['fam'] and _sb_secs['fam']['rows'] == [('k1', 'hello', '안녕')])
 case('a row with no sealed value is not in the book',
      _sb.family_sections(_sb_src, {}) == {})
+case('the book prints the declared title, never another game\'s',
+     _sb.book_name() == (config.prof('book_title_ko')
+                         or config.cfg().get('title') or '한글화'))
 
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')

@@ -385,7 +385,7 @@ def page(title, toc, body, subtitle='', extra_head=''):
 <link rel="stylesheet" href="style.css">{extra_head}
 </head><body>
 <header><div class="hwrap">
-<div class="brand">크림슨 슈라우드 대본집<small>CRIMSON SHROUD · KOREAN SCRIPT BOOK</small></div>
+<div class="brand">{esc(book_name())} 대본집<small>{esc(book_name_en())} · KOREAN SCRIPT BOOK</small></div>
 <div class="grow"></div>
 <input type="search" id="q" placeholder="원문·번역 검색">
 <span id="cnt" style="font-size:12px;color:var(--dim)"></span>
@@ -400,6 +400,20 @@ def page(title, toc, body, subtitle='', extra_head=''):
 <footer>ROM 원문 + 한글패치 봉인 매니페스트에서 자동 생성. 게임 데이터 자체는 포함하지 않습니다.</footer>
 </main></div>
 <script src="app.js"></script></body></html>"""
+
+
+def book_name():
+    """The Korean display name of the title, declared - never guessed.
+
+    A book that prints another game's name is worse than one with a plain name, and
+    transliterating an English title in code would invent a rendering the project never
+    decided. Falls back to the declared latin title.
+    """
+    return config.prof('book_title_ko') or config.cfg().get('title') or '한글화'
+
+
+def book_name_en():
+    return (config.cfg().get('title') or '').upper()
 
 
 # One page per section once the book is too large to open. Measured: the reference title is
@@ -551,14 +565,41 @@ def build():
     n_story = sum(len(s['rows']) for k, s in sections.items() if not k.startswith('fm'))
     n_field = sum(len(s['rows']) for k, s in sections.items() if k.startswith('fm'))
     n_app = sum(app_counts.values())
-    idx = f"""
+    scene_grammar = 'dialogue' in src
+    stat = f"""
 <div class="stat">
 <span><b>{n_story}</b> 본편 대사 블록</span>
 <span><b>{n_field}</b> 필드 메시지</span>
 <span><b>{n_app}</b> 부록 항목</span>
 <span><b>{len(man)}</b> 전체 번역 문자열</span>
 <span>매니페스트 <b>{esc(digest[:16])}</b></span>
-</div>
+</div>"""
+    if not scene_grammar:
+        # The prose below describes the reference title's chapters, field-message layout and
+        # source-language policy. None of that is derivable for another title, and printing
+        # it anyway makes the book state facts about a game it is not. State only what was
+        # measured, and let the contents page carry the structure.
+        idx = stat + f"""
+<div class="row"><div class="ko">
+<p><b>{esc(book_name())}</b> 한글화의 전체 텍스트를 원문과 한국어 번역으로 나란히
+정리한 대본집입니다.</p>
+<p>본문은 게임이 텍스트를 담고 있는 순서대로, 컨테이너의 묶음 단위별로 배열했습니다.
+전체 {len(sections)}개 묶음, {n_story}개 대사 블록입니다.</p>
+<p>모든 문자열은 ROM에서 직접 추출한 원문과, 한글패치가 실제로 탑재하는
+<span style="font-family:var(--mono);font-size:13px">manifest.json</span>의 봉인된
+번역문에서 자동 생성됩니다. 화면에 나오는 문장과 이 문서의 문장은 같습니다.</p>
+<p>상단 버튼으로 <b>대역 / 한국어 / English</b> 표시를 바꿀 수 있고, 검색창은 원문과
+번역문을 동시에 찾습니다.</p>
+<p><a href="story.html"><b>본문 차례로 이동 →</b></a></p>
+</div></div>
+<h2>구성</h2>
+<table><thead><tr><th>구분</th><th class="ko">내용</th><th>분량</th></tr></thead><tbody>
+<tr><td class="key">story.html</td><td class="ko">묶음별 차례 (묶음마다 한 쪽)</td><td>{len(sections)}</td></tr>
+<tr><td class="key">script.md</td><td class="ko">전체 대본 Markdown 원본 (보관·인용용)</td><td>1</td></tr>
+</tbody></table>
+"""
+    else:
+        idx = stat + f"""
 <div class="row"><div class="ko">
 <p><b>크림슨 슈라우드</b>(Crimson Shroud, 닌텐도 3DS eShop, 2012)의 전체 텍스트를
 영문 원문과 한국어 번역으로 나란히 정리한 대본집입니다.</p>
@@ -600,16 +641,17 @@ def build():
 </div></div>
 """
     open(f'{OUT}/index.html', 'w').write(page(
-        '크림슨 슈라우드 대본집', toc(), idx,
+        f'{book_name()} 대본집', toc(), idx,
         '영문 원문 · 한국어 번역 대역본'))
 
     # ---- markdown
-    md = ['# 크림슨 슈라우드 대본집',
+    md = [f'# {book_name()} 대본집',
           '',
           f'- 매니페스트 digest: `{digest}`',
-          f'- 본편 대사 블록 {n_story} · 필드 메시지 {n_field} · 부록 항목 {n_app}',
-          '- 산문 기준 원문은 영어판, 고유명은 일본어 원판 표기를 따릅니다.',
-          '']
+          f'- 본편 대사 블록 {n_story} · 필드 메시지 {n_field} · 부록 항목 {n_app}']
+    if scene_grammar:
+        md.append('- 산문 기준 원문은 영어판, 고유명은 일본어 원판 표기를 따릅니다.')
+    md.append('')
     for sid, sec in sections.items():
         md.append(f'## {sec["title_ko"]} — {sec["title_en"]}')
         md.append('')

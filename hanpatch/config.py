@@ -47,7 +47,7 @@ _LIST_KEYS = ('models', 'name_keys', 'ui_only_families', 'ui_only_terms', 'hard_
 # the profile.
 _MODE_KEYS = {'copied_spans_tokenizer': ('latin',)}
 _BOOL_KEYS = ('fullwidth_is_content', 'engine_wraps')
-_STRING_KEYS = ('judge_policy',)
+_STRING_KEYS = ('judge_policy', 'book_title_ko')
 
 
 def load_object(path, what):
@@ -241,6 +241,9 @@ DEFAULT_PROFILE = {
     # Delimiters that are literal source content for this container, not markup. An empty
     # list is the safe default; a title must measure and declare an exception explicitly.
     'literal_delimiters': [],
+    # Korean display name for the script book. Declared, because transliterating a latin
+    # title in code invents a rendering the project never decided.
+    'book_title_ko': '',
     # glossary scoping
     # Optional per-title model pool. Absent means the registry decides by role.
     'models': [],
