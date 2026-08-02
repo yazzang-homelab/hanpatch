@@ -44,7 +44,15 @@ def producers():
         except (OSError, SystemExit):
             continue
     return out
-JUDGES = ['nimproxy:deepseek-ai/deepseek-v4-pro',
+# QA order starts with measured high-throughput independent lanes. The Codex accounts are
+# distinct judge identities and the paid DeepSeek Pro model is distinct from the Flash
+# translation lane. The older free rotators remain fallbacks, but several were observed
+# returning 410/400 or parking under concurrent QA and must not be the only path.
+JUDGES = ['codex1:gpt-5.6-luna',
+          'codex2:gpt-5.6-luna',
+          'codex3:gpt-5.6-luna',
+          'deepseek:deepseek-v4-pro',
+          'nimproxy:deepseek-ai/deepseek-v4-pro',
           'opencode:nemotron-3-ultra-free',
           'nimproxy:qwen/qwen3-next-80b-a3b-instruct',
           'groq:openai/gpt-oss-120b',
@@ -193,8 +201,9 @@ def main(argv=None):
                 continue
             try:
                 sub = glossary.relevant(glossary.load(), [r[0] for r in batch])
-                raw = prov.chat(system_prompt(), prompt(batch, sub), temperature=0.0,
-                                max_tokens=min(4000, 400 + 40 * len(batch)))
+                with providers.gate_for(prov.id):
+                    raw = prov.chat(system_prompt(), prompt(batch, sub), temperature=0.0,
+                                     max_tokens=min(4000, 400 + 40 * len(batch)))
             except RuntimeError as e:
                 print(f'    ! {e}'[:160], flush=True)
                 continue
