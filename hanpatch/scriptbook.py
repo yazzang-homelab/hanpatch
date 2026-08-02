@@ -402,6 +402,23 @@ def page(title, toc, body, subtitle='', extra_head=''):
 <script src="app.js"></script></body></html>"""
 
 
+# One page per section once the book is too large to open. Measured: the reference title is
+# 660 story rows in a 460KB page, while a full JRPG script is 65836 rows and renders a 22MB
+# page that a browser cannot usefully display. The threshold is a size decision, not a title
+# fact, so it lives here rather than in a profile.
+PAGE_ROW_LIMIT = 4000
+
+
+def slug(sid):
+    """A section id that is safe in a file name and a URL fragment.
+
+    Family-shaped ids like `#100000` carry a character that ends a URL at the fragment, so
+    an unslugged link silently points at the wrong page.
+    """
+    s = re.sub(r'[^A-Za-z0-9_-]+', '-', sid).strip('-')
+    return s or 'sec'
+
+
 def build():
     if OUT is None:
         _out()
@@ -409,18 +426,23 @@ def build():
     os.makedirs(OUT, exist_ok=True)
     sections = dialogue_sections(src, man)
 
+    paged = sum(len(s['rows']) for s in sections.values()) > PAGE_ROW_LIMIT
+
+    def href(sid):
+        return f'p-{slug(sid)}.html#{slug(sid)}' if paged else f'story.html#{sid}'
+
     nav_story, nav_field, nav_rules = [], [], []
     sn = 0
     for sid, sec in sections.items():
         kind = sec.get('kind', 'story')
         if kind == 'story':
             sn += 1
-            nav_story.append(f'<a href="story.html#{sid}">'
+            nav_story.append(f'<a href="{href(sid)}">'
                              f'<i>{sn}</i>{esc(sec["title_ko"])}</a>')
         elif kind == 'field':
-            nav_field.append(f'<a href="story.html#{sid}">{esc(sec["title_ko"])}</a>')
+            nav_field.append(f'<a href="{href(sid)}">{esc(sec["title_ko"])}</a>')
         else:
-            nav_rules.append(f'<a href="story.html#{sid}">{esc(sec["title_ko"])}</a>')
+            nav_rules.append(f'<a href="{href(sid)}">{esc(sec["title_ko"])}</a>')
     nav_app = [f'<a href="appendix.html#{a[0]}">{esc(a[1])}</a>' for a in APPENDICES]
 
     def toc(active=''):
@@ -431,46 +453,78 @@ def build():
                 f'<h3>기타</h3><a href="index.html">표지 · 통계</a>'
                 f'<a href="script.md">Markdown 원본</a>')
 
-    # ---- story page
+    # ---- story page(s)
     ids = list(sections)
     story_ids = [i for i in ids if sections[i].get('kind') == 'story']
-    body = []
-    total_rows = 0
-    for n, (sid, sec) in enumerate(sections.items()):
+
+    def section_html(n, sid, sec, anchor, prev_href, next_href):
         kind = sec.get('kind', 'story')
         num = ''
         if kind == 'story':
             num = f'<span class="ord">{story_ids.index(sid) + 1}/{len(story_ids)}</span> '
-        prev_id = ids[n - 1] if n else None
-        next_id = ids[n + 1] if n + 1 < len(ids) else None
         nav = '<div class="secnav noprint">'
-        nav += (f'<a href="#{prev_id}">◀ {esc(sections[prev_id]["title_ko"])}</a>'
-                if prev_id else '<span></span>')
-        nav += (f'<a href="#{next_id}">{esc(sections[next_id]["title_ko"])} ▶</a>'
-                if next_id else '<span></span>')
+        nav += (f'<a href="{prev_href[0]}">◀ {esc(prev_href[1])}</a>'
+                if prev_href else '<span></span>')
+        nav += (f'<a href="{next_href[0]}">{esc(next_href[1])} ▶</a>'
+                if next_href else '<span></span>')
         nav += '</div>'
-        body.append(f'<section class="sec" data-kind="{kind}" data-sid="{sid}">')
-        body.append(f'<h2 id="{sid}">{num}{esc(sec["title_ko"])} '
-                    f'<span style="font-size:13px;color:var(--dim)">'
-                    f'{esc(sec["title_en"])}</span></h2>')
+        out = [f'<section class="sec" data-kind="{kind}" data-sid="{sid}">',
+               f'<h2 id="{anchor}">{num}{esc(sec["title_ko"])} '
+               f'<span style="font-size:13px;color:var(--dim)">'
+               f'{esc(sec["title_en"])}</span></h2>']
         for key, en, ko in sec['rows']:
-            total_rows += 1
-            body.append(f'<div class="row"><span class="k">{esc(key)}</span>'
-                        f'{paras(ko, "ko")}{paras(en, "en")}</div>')
-        body.append(nav)
-        body.append('</section>')
+            out.append(f'<div class="row"><span class="k">{esc(key)}</span>'
+                       f'{paras(ko, "ko")}{paras(en, "en")}</div>')
+        out.append(nav)
+        out.append('</section>')
+        return ''.join(out)
+
+    total_rows = sum(len(s['rows']) for s in sections.values())
     lead = (f'<div class="readbar noprint">'
             f'<span>읽기 범위</span>'
             f'<button class="btn" data-scope="story">본편만</button>'
             f'<button class="btn" data-scope="story+field">본편+필드</button>'
             f'<button class="btn" data-scope="all">전체</button>'
             f'<span class="grow"></span>'
-            f'<a class="btn" id="resume" href="#{story_ids[0]}">이어서 읽기</a>'
+            f'<a class="btn" id="resume" href="'
+            f'{href(story_ids[0]) if paged else "#" + story_ids[0]}">이어서 읽기</a>'
             f'</div>')
-    open(f'{OUT}/story.html', 'w').write(page(
-        '본편 대본', toc(), lead + ''.join(body),
-        f'스토리 {len(story_ids)}장면 · 전체 {len(sections)}섹션 · '
-        f'{total_rows}개 대사 블록 · 위에서 아래로 읽으면 스토리 순서입니다'))
+    if paged:
+        # One section per page, plus a contents page that keeps `story.html` a valid entry
+        # point. Every link in the shared table of contents already points at these files.
+        for n, (sid, sec) in enumerate(sections.items()):
+            prev_id = ids[n - 1] if n else None
+            next_id = ids[n + 1] if n + 1 < len(ids) else None
+            html = section_html(
+                n, sid, sec, slug(sid),
+                (href(prev_id), sections[prev_id]['title_ko']) if prev_id else None,
+                (href(next_id), sections[next_id]['title_ko']) if next_id else None)
+            open(f'{OUT}/p-{slug(sid)}.html', 'w').write(page(
+                sec['title_ko'], toc(), html,
+                f'{len(sec["rows"])}개 대사 블록 · {n + 1}/{len(ids)} 섹션'))
+        contents = ['<div class="rows">']
+        for n, (sid, sec) in enumerate(sections.items(), 1):
+            contents.append(
+                f'<div class="row"><span class="k">{n}/{len(ids)}</span>'
+                f'<p><a href="{href(sid)}">{esc(sec["title_ko"])}</a> '
+                f'<span style="color:var(--dim)">{len(sec["rows"])}개 블록</span></p>'
+                f'</div>')
+        contents.append('</div>')
+        open(f'{OUT}/story.html', 'w').write(page(
+            '본편 대본 · 차례', toc(), lead + ''.join(contents),
+            f'전체 {len(sections)}섹션 · {total_rows}개 대사 블록 · '
+            f'섹션마다 한 쪽으로 나뉘어 있습니다'))
+    else:
+        body = [section_html(
+            n, sid, sec, sid,
+            (f'#{ids[n - 1]}', sections[ids[n - 1]]['title_ko']) if n else None,
+            (f'#{ids[n + 1]}', sections[ids[n + 1]]['title_ko'])
+            if n + 1 < len(ids) else None)
+            for n, (sid, sec) in enumerate(sections.items())]
+        open(f'{OUT}/story.html', 'w').write(page(
+            '본편 대본', toc(), lead + ''.join(body),
+            f'스토리 {len(story_ids)}장면 · 전체 {len(sections)}섹션 · '
+            f'{total_rows}개 대사 블록 · 위에서 아래로 읽으면 스토리 순서입니다'))
 
     # ---- appendix page
     ab = []

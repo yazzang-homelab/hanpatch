@@ -1956,6 +1956,19 @@ case('a lane that recorded a verdict stays an accepted identity',
 case('the panel needs one more lane than the release rule requires',
      qagate.REQUIRED_JUDGES + 1 <= len(_qamod.JUDGES))
 
+print('== the script book stays openable on a full-size corpus ==')
+from hanpatch import scriptbook as _sb
+case('a family-shaped section id is safe in a file name and a fragment',
+     _sb.slug('#100000') == '100000' and _sb.slug('ch1_0') == 'ch1_0')
+case('an id with nothing safe in it still yields a usable name',
+     _sb.slug('###') == 'sec')
+_sb_src = {'fam': [{'key': 'k1', 'en': 'hello'}, {'key': 'k2', 'en': '   '}]}
+_sb_secs = _sb.family_sections(_sb_src, {'fam/k1': '안녕'})
+case('a title without the reference scene grammar still gets sections',
+     list(_sb_secs) == ['fam'] and _sb_secs['fam']['rows'] == [('k1', 'hello', '안녕')])
+case('a row with no sealed value is not in the book',
+     _sb.family_sections(_sb_src, {}) == {})
+
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')
 _sp_prev = config.root()
