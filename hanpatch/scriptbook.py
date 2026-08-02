@@ -72,8 +72,32 @@ def flow(s):
 
 
 # ---------------------------------------------------------------- structure
+def family_sections(src, man):
+    """Sections straight from the title's own families, in source order.
+
+    The scene grammar below (chapter/field/tutorial keys, `region` stage names) is the
+    reference title's structure, not a portable one. A title that does not carry it still
+    has a script, and the container already groups it: one section per family, every
+    shippable row in the order the container stores it. Without this the renderer raised
+    `KeyError: 'dialogue'` on any other title, so the book simply did not exist for them.
+    """
+    sections = OrderedDict()
+    for fam in src:
+        rows = [(it['key'], it['en'], man[f'{fam}/{it["key"]}'])
+                for it in src[fam]
+                if f'{fam}/{it["key"]}' in man
+                and it['en'].strip() and not tm.is_skip(it['en'], it['key'])]
+        if rows:
+            sections[fam] = {'title_en': fam, 'title_ko': fam,
+                             'keys': [r[0] for r in rows], 'rows': rows,
+                             'kind': 'story'}
+    return sections
+
+
 def dialogue_sections(src, man):
     """-> OrderedDict[section_id] = {title_en, title_ko, rows:[(key, en, ko)]}"""
+    if 'dialogue' not in src:
+        return family_sections(src, man)
     rows = {it['key']: it for it in src['dialogue']}
     ko = {k.split('/', 1)[1]: v for k, v in man.items() if k.startswith('dialogue/')}
 
