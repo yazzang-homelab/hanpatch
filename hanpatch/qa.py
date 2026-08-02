@@ -140,6 +140,24 @@ def save(doc, lock):
             os.fsync(fh.fileno())
         os.replace(tmp, QA_PATH())
 
+def hold_panel_lock():
+    """Refuse to run a second panel against the same verdict file.
+
+    Every batch rewrites the whole document from the process's own copy, so two panels do
+    not merge - the later writer silently discards the other's verdicts, which are hours of
+    paid work that the log already reported as recorded.
+    """
+    import fcntl
+    path = QA_PATH() + '.lock'
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fh = open(path, 'a+')
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(f'another QA panel is already running (lock {path}); '
+                         f'two panels overwrite each other\'s verdicts')
+    return fh                                   # held for the process lifetime
+
 
 def prompt(rows, gl=None):
     payload = {}
@@ -171,6 +189,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     providers.load_dotenv()
+    _panel_lock = hold_panel_lock()              # noqa: F841 - held until exit
     pool = [p for p in (providers.make(s) for s in active_judges()) if p]
     # A judge may not score its own output, so a panel of exactly REQUIRED_JUDGES starves
     # every pair whose producer is one of them. Refuse to run a pool that cannot satisfy
