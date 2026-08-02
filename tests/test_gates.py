@@ -1935,6 +1935,12 @@ case('a low-scoring pass is still repair work',
      list(_runmod.qa_reasons({'c': [{'d': 'pass', 'a': 3, 'f': 5,
                                      'en': 'src1', 'ko': 'ko1', 'r': 'x'}]},
                              {'src1': 'ko1'}, 4)) == ['src1'])
+# The judged value is the SEALED one, so freshness is decided against the manifest.
+case('shipped values come from the manifest, not the raw memory',
+     _runmod.shipped_values({'f': [{'en': 'src1', 'key': 'k1'}]},
+                            {'f/k1': 'sealed'}) == {'src1': 'sealed'})
+case('a source with no manifest entry is not shippable and carries no verdict',
+     _runmod.shipped_values({'f': [{'en': 'src1', 'key': 'k1'}]}, {}) == {})
 
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')

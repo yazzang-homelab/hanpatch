@@ -69,7 +69,26 @@ def save_json_locked(path, updates, removals=(), what='the translation state sha
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
-def qa_reasons(flagged, merged, floor):
+def shipped_values(src, manifest_entries):
+    """source text -> the value the QA panel actually judged.
+
+    QA scores the SEALED manifest value, not the raw translation memory entry: the manifest
+    resolves overrides and applies post-processing, so the two differ for any row those
+    touched. Comparing a verdict against the TM value therefore discarded almost every real
+    complaint as stale (449 of 13788 survived), which would have shipped the corpus with the
+    repair pass reporting nothing to do.
+    """
+    from hanpatch import qagate
+    out = {}
+    for fam, items in src.items():
+        for it in items:
+            ko = manifest_entries.get(f'{fam}/{it["key"]}')
+            if ko is not None:
+                out.setdefault(qagate.source_of(it), ko)
+    return out
+
+
+def qa_reasons(flagged, shipped, floor):
     """source -> actionable judge complaints, from the `pair_key`-keyed QA review.
 
     A pair is listed when ANY of its records is flagged, so the passing records in the
@@ -85,7 +104,7 @@ def qa_reasons(flagged, merged, floor):
                     and min(rec.get('a', 0), rec.get('f', 0)) >= floor):
                 continue
             en = rec.get('en')
-            if not en or tm.lookup(merged, en) != rec.get('ko'):
+            if not en or shipped.get(en) != rec.get('ko'):
                 continue
             reasons.setdefault(en, []).append(str(rec.get('r', '')).strip())
     return reasons
@@ -112,10 +131,12 @@ def main(argv=None):
         pool = providers.build_pool(declared or None)
     src = config.load_object(config.src_path(), 'the extracted source')
     if args.qafail:
+        from hanpatch import manifest as manmod
         from hanpatch import qagate
         flagged = config.load_object(config.out('qa_flagged.json'),
                                      'the QA flagged review')
-        reasons = qa_reasons(flagged, tm.load(), qagate.FLOOR)
+        man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
+        reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR)
         todo = []
         seen = set()
         for it in src[args.family]:
