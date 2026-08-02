@@ -167,6 +167,41 @@ not make the delimiter checker permissive globally. The default is an empty list
 same declared exception is checked on target output. A single observed extra brace in one
 DQ7 record was enough to block the last row until this fact was recorded.
 
+## The QA repair cycle
+
+A judge verdict is about one exact pair: the source and *the value that ships*. Everything
+below is measured on a closed cycle of 65836 pairs, not inferred.
+
+**Freshness is decided against the sealed artifact.** A build that resolves overrides or
+post-processes text makes the sealed value differ from the raw translation store, so
+comparing verdicts against the raw store discards real complaints as stale — here it left
+449 of 13788 actionable and would have reported the repair pass complete. Print the flagged
+count and the actionable count together; a large silent gap between them is an authority bug,
+not progress.
+
+**Repair, reseal and re-judge are one cycle.** The panel only ever reads the sealed
+artifact, so a repaired value that was never resealed is invisible and the next pass
+reproduces the same complaints forever. One closed cycle here: 9810 rows repaired, manifest
+resealed, panel re-run, actionable 13788 -> 8856.
+
+A repaired value is a NEW pair and therefore arrives with no verdicts, which is what keeps
+the loop honest — an unhelpful repair is judged again from scratch instead of inheriting the
+old complaint. It is also why a pass that repairs nothing must stop and escalate rather than
+retry an identical prompt.
+
+**One pass adds one verdict per pair.** Requiring N distinct judges takes N passes; a run
+that reports every pair at one judge has not failed, it has finished one pass.
+
+**Exclude judges per row, never per batch.** A judge may not score its own output. Applying
+that test to the whole batch starves a small pool: a mixed batch excludes every lane, and
+those pairs never reach the required panel size no matter how many passes run. Twenty pairs
+sat unjudged across three full passes until the test moved to the row.
+
+**One panel per verdict file.** Each batch rewrites the whole document from the process's
+own copy, so two concurrent panels do not merge — the later writer discards the other's
+verdicts. Take an exclusive lock at startup, and flush before the atomic rename so a crash
+cannot lose verdicts the log already reported.
+
 ## Choosing judge panel lanes
 
 Panel cost is *corpus x panel size*, not corpus. A per-token lane that looks cheap for one
@@ -186,6 +221,18 @@ hours later as batches that report "unjudged".
 Never delete a lane from the accepted-identity set to retire it. Verdicts already recorded
 by that lane are still true; separate the identity set from the runtime pool and change only
 the pool.
+
+## Supervising a run nobody is watching
+
+A supervisor exists to notice that work stopped, so it must be harder to kill than the work
+it supervises. Catch the *exits*, not just the exceptions: loaders that raise `SystemExit`
+on a malformed document are right for a CLI and fatal inside a supervisor. One transient bad
+read of a 40MB verdict file ended supervision here while the repair loop kept running
+unobserved; after the fix the supervisor detected a dead loop and restarted it on its own.
+
+Repeated `SIGSEGV` from unrelated binaries — the interpreter and a vendor CLI both — is a
+machine-stability signal, not evidence about the corpus. Lower concurrency, record the
+crashed units, and let the next pass retry them.
 
 ## When a gate fails
 
