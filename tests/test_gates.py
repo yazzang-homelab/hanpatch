@@ -1955,35 +1955,40 @@ case('a lane that recorded a verdict stays an accepted identity',
      and set(_qamod.codex_judges()) <= set(_qamod.JUDGES))
 case('the panel needs one more lane than the release rule requires',
      qagate.REQUIRED_JUDGES + 1 <= len(_qamod.JUDGES))
-class _DeadLane:
-    id = 'dead:lane'
+class _Lane:
+    def __init__(self, lane_id, live=True):
+        self.id = lane_id
+        self._live = live
 
     def chat(self, *a, **k):
-        raise RuntimeError('usage limit')
-
-
-class _LiveLane:
-    def __init__(self, i):
-        self.id = f'live{i}:lane'
-
-    def chat(self, *a, **k):
+        if not self._live:
+            raise RuntimeError('usage limit')
         return '{"0":"ok"}'
 
 
 case('a lane that refuses the probe is not counted as a judge',
-     not _qamod.alive(_DeadLane()) and _qamod.alive(_LiveLane(1)))
-_lp_made = {'codexA:m': _LiveLane('A'), 'codexB:m': _LiveLane('B'),
-            'codexC:m': _DeadLane(), 'metered:m': _LiveLane('C')}
+     not _qamod.alive(_Lane('dead:m1', live=False))
+     and _qamod.alive(_Lane('live:m1')))
+# Judge identity is the MODEL. Two accounts of one model are one opinion, so a panel of
+# three same-model accounts cannot satisfy a rule about independent models.
+case('accounts and endpoints of one model collapse to one identity',
+     _qamod.lane_model('codex1:gpt-5.6-luna') == _qamod.lane_model('codex2:gpt-5.6-luna')
+     and (_qamod.lane_model('deepseek:deepseek-v4-pro')
+          == _qamod.lane_model('nimproxy:deepseek-ai/deepseek-v4-pro'))
+     and _qamod.lane_model('codex1:gpt-5.6-luna') != _qamod.lane_model('groq:gpt-oss-120b'))
+_lp_made = {'acctA:luna': _Lane('acctA:luna'), 'acctB:luna': _Lane('acctB:luna'),
+            'acctC:luna': _Lane('acctC:luna', live=False),
+            'free:qwen3': _Lane('free:qwen3'), 'free:oss120b': _Lane('free:oss120b')}
 _lp_prev = (_qamod.active_judges, _qamod.LEGACY_JUDGES, _prov.make)
 try:
-    _qamod.active_judges = lambda: ['codexA:m', 'codexB:m', 'codexC:m']
-    _qamod.LEGACY_JUDGES = ['metered:m']
+    _qamod.active_judges = lambda: ['acctA:luna', 'acctB:luna', 'acctC:luna']
+    _qamod.LEGACY_JUDGES = ['free:qwen3', 'free:oss120b']
     _prov.make = lambda s, **k: _lp_made.get(s)
     _lp_pool = [p.id for p in _qamod.live_panel(3)]
-    case('a dead preferred lane is replaced so the release rule stays reachable',
-         _lp_pool == ['liveA:lane', 'liveB:lane', 'liveC:lane'])
-    case('no metered lane is admitted while enough preferred lanes answer',
-         [p.id for p in _qamod.live_panel(2)] == ['liveA:lane', 'liveB:lane'])
+    case('a same-model panel is widened until three distinct models answer',
+         _lp_pool == ['acctA:luna', 'acctB:luna', 'free:qwen3', 'free:oss120b'])
+    case('one model is one judge no matter how many accounts answer',
+         [p.id for p in _qamod.live_panel(1)] == ['acctA:luna', 'acctB:luna'])
 finally:
     _qamod.active_judges, _qamod.LEGACY_JUDGES, _prov.make = _lp_prev
 # Fallback order is a cost order: a metered lane must be the last resort, not the first.

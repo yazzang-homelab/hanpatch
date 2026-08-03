@@ -28,8 +28,9 @@ def WAIVERS():
 def APPROVAL():
     return config.out('manifest.approved')
 FLOOR = 4                       # release policy, deliberately not configurable
-REQUIRED_JUDGES = 2             # independent agreement, not a single opinion
+REQUIRED_JUDGES = 2             # independent MODELS, not two accounts of one model
 JUDGES = set(qamod.JUDGES)
+lane_model = qamod.lane_model   # one definition of judge identity, shared with the panel
 WAIVER_CATEGORIES = {'JP_NAMING', 'ELEMENT_TERMS', 'OFFICIAL_HW_TERM',
                      'GAME_TERM', 'EN_SOURCE_PRIORITY', 'SOURCE_BUG',
                      'TEMPLATE', 'JUDGE_ERROR', 'JP_CONVENTION',
@@ -67,8 +68,12 @@ def verdict_problem(rec, en, ko, producer):
         return 'no judge recorded'
     if rec['judge'] not in JUDGES:
         return f'unknown judge {rec["judge"]!r}'
-    if producer and rec['judge'] == producer:
-        return f'judged by its own producer ({producer})'
+    if producer and lane_model(rec['judge']) == lane_model(producer):
+        # The rule is about the MODEL, not the account or the endpoint. Comparing lane ids
+        # let a sibling account of the producing model grade its own output: measured on
+        # this corpus, 25123 of 54071 shipped pairs carried such a verdict.
+        return (f'judged by its own model '
+                f'({lane_model(producer)} via {rec["judge"]} for {producer})')
     if rec['d'] != 'pass':
         return f'disposition={rec["d"]} ({str(rec.get("r", ""))[:60]})'
     if min(a, f) < FLOOR:
@@ -80,18 +85,21 @@ def panel_problem(recs, en, ko, producer):
     """None when an independent panel of judges unanimously passes the pair.
 
     A single model produces correlated false negatives, so release requires
-    REQUIRED_JUDGES distinct, schema-valid `pass` verdicts.
+    REQUIRED_JUDGES verdicts from DISTINCT MODELS. Counting lanes instead of models made
+    two accounts of one model look like a panel: measured here, 25778 of 54071 shipped
+    pairs were "double-judged" by a single model, and only 10463 carried two genuinely
+    different models.
     """
     if not recs:
         return 'no verdict for this exact pair'
-    judges = set()
+    models = set()
     for rec in recs:
         p = verdict_problem(rec, en, ko, producer)
         if p is not None:
             return p
-        judges.add(rec['judge'])
-    if len(judges) < REQUIRED_JUDGES:
-        return (f'only {len(judges)} judge(s) passed this pair, '
+        models.add(lane_model(rec['judge']))
+    if len(models) < REQUIRED_JUDGES:
+        return (f'only {len(models)} model(s) passed this pair, '
                 f'{REQUIRED_JUDGES} required')
     return None
 

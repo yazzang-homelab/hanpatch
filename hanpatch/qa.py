@@ -65,6 +65,20 @@ def codex_judges():
     return [f'codex{a}:{CODEX_MODEL}' for a in providers.codex_accounts()]
 
 
+def lane_model(lane_id):
+    """The MODEL behind a lane id: accounts and endpoints collapse, models do not.
+
+    `codex1:gpt-5.6-luna` and `codex2:gpt-5.6-luna` are one model on two accounts;
+    `deepseek:deepseek-v4-pro` and `nimproxy:deepseek-ai/deepseek-v4-pro` are one model on
+    two endpoints. Independence is a property of the model, so every rule that says "a
+    different judge" resolves to this, not to the lane.
+    """
+    if not lane_id:
+        return ''
+    lane, _, model = str(lane_id).partition(':')
+    return (model.split('/')[-1] or lane).strip()
+
+
 JUDGES = codex_judges() + LEGACY_JUDGES
 
 
@@ -212,18 +226,21 @@ def live_panel(required):
     the operator must see, not one to discover in a bill.
     """
     pool = [p for p in (providers.make(s) for s in active_judges()) if p and alive(p)]
-    if len(pool) >= required:
+    have = {lane_model(p.id) for p in pool}
+    if len(have) >= required:
         return pool
-    have = {p.id for p in pool}
+    # Counted in MODELS: three Codex accounts are one model, so a Codex-only panel can never
+    # satisfy a rule about independent models no matter how many accounts answer.
     for spec in LEGACY_JUDGES:
-        if len(pool) >= required:
+        if len(have) >= required:
             break
         p = providers.make(spec)
-        if p is None or p.id in have or not alive(p):
+        if p is None or lane_model(p.id) in have or not alive(p):
             continue
-        print(f'  + admitting {p.id}: only {len(pool)} preferred lane(s) answered, '
+        print(f'  + admitting {p.id}: only {len(have)} preferred model(s) answered, '
               f'{required} needed', flush=True)
         pool.append(p)
+        have.add(lane_model(p.id))
     return pool
 
 
@@ -241,16 +258,17 @@ def main(argv=None):
     providers.load_dotenv()
     _panel_lock = hold_panel_lock()              # noqa: F841 - held until exit
     from hanpatch import qagate
-    # A judge may not score its own output, so a panel of exactly REQUIRED_JUDGES starves
-    # every pair whose producer is one of them. Liveness is part of that count: a lane that
-    # is configured but out of quota cannot judge anything.
+    # A model may not score its own output, so a panel of exactly REQUIRED_JUDGES models
+    # starves every pair its own models produced. Liveness is part of that count: a lane
+    # that is configured but out of quota cannot judge anything.
     need = qagate.REQUIRED_JUDGES + 1
     pool = live_panel(need)
-    if len(pool) < need:
+    models = {lane_model(p.id) for p in pool}
+    if len(models) < need:
         raise SystemExit(
-            f'judge pool too small: {len(pool)} live lane(s), {need} needed so a pair '
-            f'whose producer is a judge can still reach {qagate.REQUIRED_JUDGES} distinct '
-            f'verdicts')
+            f'judge pool too small: {len(models)} live model(s) {sorted(models)}, '
+            f'{need} needed so a pair produced by one of them can still reach '
+            f'{qagate.REQUIRED_JUDGES} independent verdicts')
     src = config.load_object(config.src_path(), 'the extracted source')
     doc = load()
     prov_of = producers()
@@ -272,12 +290,18 @@ def main(argv=None):
         if tm.is_skip(en, it['key']) or not en.strip():
             en = it.get('jp') or en      # placeholder EN row: JP is the real source
         pk = pair_key(en, ko)
-        have = {r.get('judge') for r in doc.get(pk, [])}
+        # Coverage is counted in MODELS, and a verdict from the producing model does not
+        # count at all - the gate will reject it, so treating it as progress would leave the
+        # pair permanently short while the run reported it done.
+        pm = lane_model(prov_of.get(en, ''))
+        have = {lane_model(r.get('judge')) for r in doc.get(pk, [])}
+        have.discard(pm)
+        have.discard('')
         if len(have) >= args.judges or pk in seen:
             continue
         seen.add(pk)
         rows.append((en, ko, it.get('jp', ''), pk,
-                     prov_of.get(en, ''), tuple(have)))
+                     prov_of.get(en, ''), tuple(sorted(have))))
     rows.sort(key=lambda r: (tuple(sorted(r[5])), r[4]))
     if args.limit:
         rows = rows[:args.limit]
@@ -301,8 +325,9 @@ def main(argv=None):
             # whole batch when any one row is ineligible starves a small pool, because a
             # mixed batch then excludes every lane and the stragglers never reach the
             # required panel size no matter how many passes run.
+            pmodel = lane_model(prov.id)
             batch = [r for r in pending
-                     if not (r[4] and r[4] == prov.id) and prov.id not in r[5]]
+                     if lane_model(r[4]) != pmodel and pmodel not in r[5]]
             if not batch:
                 continue
             try:
