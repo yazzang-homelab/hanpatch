@@ -47,6 +47,16 @@ def producers():
 # Panel identity set. A verdict recorded by any of these remains valid forever, so entries
 # are never removed - only the RUNTIME pool below changes.
 CODEX_MODEL = 'gpt-5.6-luna'
+# The gateway panel: three DIFFERENT model families, each on both accounts. Measured
+# round-trip on this box: 3-12s per call, versus 40-170s for the free rotators, and every
+# lane here is flat-rate. Two accounts of one model do not widen the panel - `lane_model`
+# collapses them - they only raise throughput, which is exactly what is wanted when the
+# same model must judge tens of thousands of pairs.
+GATEWAY_JUDGES = ['agy:gemini-3-pro', 'agy:gemini-3-pro-biz',
+                  'agy:claude-sonnet-4.6',
+                  'agy:gpt-oss-120b', 'agy:gpt-oss-120b-biz',
+                  'agy:gemini-3-flash', 'agy:gemini-3-flash-biz',
+                  'agy:claude-opus-4.6']
 # Fallback order is a COST order: free rotators first, metered last. When all three Codex
 # accounts were momentarily parked, a paid-first list admitted `deepseek:deepseek-v4-pro`
 # for an entire run - about 4900k tokens of judging that the free lanes would have done.
@@ -76,22 +86,31 @@ def lane_model(lane_id):
     if not lane_id:
         return ''
     lane, _, model = str(lane_id).partition(':')
-    return (model.split('/')[-1] or lane).strip()
+    name = (model.split('/')[-1] or lane).strip()
+    # A gateway that exposes the same model twice for two billing accounts spells the second
+    # one with a suffix (`gemini-3-pro` / `gemini-3-pro-biz`). Those are one model on two
+    # accounts: useful for throughput, worthless for independence, so the suffix collapses
+    # here rather than reintroducing the account-as-judge bug under a new spelling.
+    for suffix in ('-biz',):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
 
 
-JUDGES = codex_judges() + LEGACY_JUDGES
+JUDGES = GATEWAY_JUDGES + codex_judges() + LEGACY_JUDGES
 
 
 def active_judges():
-    """The lanes a panel run may call.
+    """The lanes a panel run may call, in preference order.
 
-    Panel cost is corpus x panel size, not corpus: a per-token lane that is affordable for
-    one translation pass is not affordable for judging every shipped pair at least twice.
-    The Codex accounts are flat-rate and are independent identities, so the panel widens by
-    adding an account rather than by spending more. Everything else stays in the identity
-    set for verdicts already recorded, and is used only when no Codex account exists.
+    Panel cost is corpus x panel size, not corpus, so every preferred lane is flat-rate. The
+    gateway lanes come first because they are the only set that offers several DIFFERENT
+    models at a few seconds per call: a Codex-only panel is one model however many accounts
+    answer, and the free rotators take 40-170s per call, which is hours per pass on a corpus
+    this size. Codex follows as another model, and the rotators remain the last free resort.
     """
-    return codex_judges() or LEGACY_JUDGES
+    return GATEWAY_JUDGES + codex_judges() + [
+        s for s in LEGACY_JUDGES if not s.startswith('deepseek:')]
 
 SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
 각 항목의 %(source_name)s 원문과 한국어 번역을 비교해 평가한다.
@@ -225,12 +244,23 @@ def live_panel(required):
     letting the queue stall, and the admission is printed - paying per token is a decision
     the operator must see, not one to discover in a bill.
     """
-    pool = [p for p in (providers.make(s) for s in active_judges()) if p and alive(p)]
-    have = {lane_model(p.id) for p in pool}
+    pool = []
+    have = set()
+    for spec in active_judges():
+        # Stop once the panel is independent AND has spare lanes for throughput. Probing the
+        # whole preference list would spend a slow-rotator round trip on every run just to
+        # discover lanes the panel does not need.
+        if len(have) >= required and len(pool) >= 2 * required:
+            break
+        p = providers.make(spec)
+        if p is None or not alive(p):
+            continue
+        pool.append(p)
+        have.add(lane_model(p.id))
     if len(have) >= required:
         return pool
-    # Counted in MODELS: three Codex accounts are one model, so a Codex-only panel can never
-    # satisfy a rule about independent models no matter how many accounts answer.
+    # Counted in MODELS: several accounts of one model are one opinion, so a same-model panel
+    # can never satisfy a rule about independent models however many accounts answer.
     for spec in LEGACY_JUDGES:
         if len(have) >= required:
             break

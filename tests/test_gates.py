@@ -1946,10 +1946,15 @@ print('== the judge panel is scaled by identity, not by spend ==')
 case('every Codex account on the machine is a judge identity',
      _qamod.codex_judges()
      == [f'codex{a}:{_qamod.CODEX_MODEL}' for a in _prov.codex_accounts()])
-case('the runtime panel is Codex-only while any account exists',
-     (_qamod.active_judges() == _qamod.codex_judges())
-     if _prov.codex_accounts() else
-     (_qamod.active_judges() == _qamod.LEGACY_JUDGES))
+case('the runtime panel leads with the flat-rate gateway models',
+     _qamod.active_judges()[:len(_qamod.GATEWAY_JUDGES)] == _qamod.GATEWAY_JUDGES)
+case('a metered lane is never in the preferred runtime panel',
+     not any(s.startswith('deepseek:') for s in _qamod.active_judges()))
+case('the preferred panel offers at least three independent models',
+     len({_qamod.lane_model(s) for s in _qamod.active_judges()})
+     >= qagate.REQUIRED_JUDGES + 1)
+case('two accounts of one gateway model are one judge identity',
+     _qamod.lane_model('agy:gemini-3-pro') == _qamod.lane_model('agy:gemini-3-pro-biz'))
 case('a lane that recorded a verdict stays an accepted identity',
      set(_qamod.LEGACY_JUDGES) <= set(_qamod.JUDGES)
      and set(_qamod.codex_judges()) <= set(_qamod.JUDGES))

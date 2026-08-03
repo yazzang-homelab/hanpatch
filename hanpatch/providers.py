@@ -397,7 +397,10 @@ CONCURRENCY = {
     'openrouter': 1,
     'tokenrouter': 1,
     'groq': 1,
-    'agy': 1,
+    # Two billing accounts behind one local gateway process, and the QA panel drives it hard:
+    # measured 3-12s per call, so one lane in flight makes a corpus-scale panel take days.
+    # Overridable because the ceiling belongs to the gateway, not to this table.
+    'agy': int(os.environ.get('HANPATCH_AGY_CONCURRENCY', '6')),
     # No local rotator, no per-minute free cap - the ceiling is the account's own rate
     # limit, so this endpoint is the one that scales with concurrency.
     'deepseek': int(os.environ.get('HANPATCH_DEEPSEEK_CONCURRENCY', '10')),
