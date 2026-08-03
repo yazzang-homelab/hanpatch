@@ -177,6 +177,47 @@ def prompt(rows, gl=None):
             json.dumps(payload, ensure_ascii=False, indent=1))
 
 
+def alive(prov):
+    """Whether the lane answers right now, not merely whether it is configured.
+
+    A configured-but-exhausted account is the worst kind of judge: `make()` succeeds, the
+    panel counts it, and the release rule then cannot be met for any pair the remaining
+    lanes produced. The failure is silent - the run records no verdicts and the queue stops
+    moving. Here that cost twelve hours: one Codex account hit its usage limit, two lanes
+    stayed live, and every pair those two produced was structurally unreachable.
+    """
+    try:
+        prov.chat('JSON만 반환한다.', '{"0":"ok"} 를 그대로 반환하라.',
+                  temperature=0.0, max_tokens=64)
+        return True
+    except Exception:                            # noqa: BLE001 - any failure is "not live"
+        return False
+
+
+def live_panel(required):
+    """Live lanes for a panel, widened past the declared preference only when forced.
+
+    Flat-rate accounts come first because a panel scores the whole corpus at least
+    `required` times. When too few of them answer, a metered lane is admitted rather than
+    letting the queue stall, and the admission is printed - paying per token is a decision
+    the operator must see, not one to discover in a bill.
+    """
+    pool = [p for p in (providers.make(s) for s in active_judges()) if p and alive(p)]
+    if len(pool) >= required:
+        return pool
+    have = {p.id for p in pool}
+    for spec in LEGACY_JUDGES:
+        if len(pool) >= required:
+            break
+        p = providers.make(spec)
+        if p is None or p.id in have or not alive(p):
+            continue
+        print(f'  + admitting {p.id}: only {len(pool)} preferred lane(s) answered, '
+              f'{required} needed', flush=True)
+        pool.append(p)
+    return pool
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--families', default='all')
@@ -190,17 +231,17 @@ def main(argv=None):
 
     providers.load_dotenv()
     _panel_lock = hold_panel_lock()              # noqa: F841 - held until exit
-    pool = [p for p in (providers.make(s) for s in active_judges()) if p]
-    # A judge may not score its own output, so a panel of exactly REQUIRED_JUDGES starves
-    # every pair whose producer is one of them. Refuse to run a pool that cannot satisfy
-    # the release rule for such a pair instead of discovering it as unjudged batches hours
-    # later.
     from hanpatch import qagate
-    if len(pool) < qagate.REQUIRED_JUDGES + 1:
+    # A judge may not score its own output, so a panel of exactly REQUIRED_JUDGES starves
+    # every pair whose producer is one of them. Liveness is part of that count: a lane that
+    # is configured but out of quota cannot judge anything.
+    need = qagate.REQUIRED_JUDGES + 1
+    pool = live_panel(need)
+    if len(pool) < need:
         raise SystemExit(
-            f'judge pool too small: {len(pool)} lane(s) available, '
-            f'{qagate.REQUIRED_JUDGES + 1} needed so a pair whose producer is a judge can '
-            f'still reach {qagate.REQUIRED_JUDGES} distinct verdicts')
+            f'judge pool too small: {len(pool)} live lane(s), {need} needed so a pair '
+            f'whose producer is a judge can still reach {qagate.REQUIRED_JUDGES} distinct '
+            f'verdicts')
     src = config.load_object(config.src_path(), 'the extracted source')
     doc = load()
     prov_of = producers()
