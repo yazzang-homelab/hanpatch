@@ -1986,6 +1986,10 @@ try:
          [p.id for p in _qamod.live_panel(2)] == ['liveA:lane', 'liveB:lane'])
 finally:
     _qamod.active_judges, _qamod.LEGACY_JUDGES, _prov.make = _lp_prev
+# Fallback order is a cost order: a metered lane must be the last resort, not the first.
+case('a metered lane is the last resort, never the first fallback',
+     _qamod.LEGACY_JUDGES[-1].startswith('deepseek:')
+     and not _qamod.LEGACY_JUDGES[0].startswith('deepseek:'))
 
 print('== the script book stays openable on a full-size corpus ==')
 from hanpatch import scriptbook as _sb

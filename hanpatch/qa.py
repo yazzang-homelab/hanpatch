@@ -47,15 +47,18 @@ def producers():
 # Panel identity set. A verdict recorded by any of these remains valid forever, so entries
 # are never removed - only the RUNTIME pool below changes.
 CODEX_MODEL = 'gpt-5.6-luna'
-LEGACY_JUDGES = ['deepseek:deepseek-v4-pro',
+# Fallback order is a COST order: free rotators first, metered last. When all three Codex
+# accounts were momentarily parked, a paid-first list admitted `deepseek:deepseek-v4-pro`
+# for an entire run - about 4900k tokens of judging that the free lanes would have done.
+LEGACY_JUDGES = ['opencode:nemotron-3-ultra-free',
                  'nimproxy:deepseek-ai/deepseek-v4-pro',
-                 'opencode:nemotron-3-ultra-free',
                  'nimproxy:qwen/qwen3-next-80b-a3b-instruct',
                  'groq:openai/gpt-oss-120b',
                  'nimproxy:nvidia/nemotron-3-super-120b-a12b',
                  'nimproxy:meta/llama-3.3-70b-instruct',
                  'opencode:mimo-v2.5-free',
-                 'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
+                 'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
+                 'deepseek:deepseek-v4-pro']
 
 
 def codex_judges():
@@ -186,12 +189,18 @@ def alive(prov):
     moving. Here that cost twelve hours: one Codex account hit its usage limit, two lanes
     stayed live, and every pair those two produced was structurally unreachable.
     """
-    try:
-        prov.chat('JSON만 반환한다.', '{"0":"ok"} 를 그대로 반환하라.',
-                  temperature=0.0, max_tokens=64)
-        return True
-    except Exception:                            # noqa: BLE001 - any failure is "not live"
-        return False
+    # Two attempts: a rotator that is parked for a few seconds is not an exhausted account,
+    # and demoting a flat-rate lane on one transient refusal is what admitted a metered lane
+    # for a whole run.
+    for attempt in range(2):
+        try:
+            prov.chat('JSON만 반환한다.', '{"0":"ok"} 를 그대로 반환하라.',
+                      temperature=0.0, max_tokens=64)
+            return True
+        except Exception:                        # noqa: BLE001 - any failure is "not live"
+            if attempt == 0:
+                time.sleep(5)
+    return False
 
 
 def live_panel(required):
