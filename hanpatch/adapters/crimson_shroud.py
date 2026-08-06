@@ -203,3 +203,55 @@ class CrimsonShroud(adapter.Adapter):
     def build_fonts(self):
         from hanpatch.platforms.threeds import fontbuild
         return fontbuild.build_all()
+
+    def recipe_facts(self):
+        """What `msgb` actually looks like, measured by the reader above.
+
+        The entry table is not at a fixed offset - the header says where it is,
+        and where the key table is too. That is why a recipe's table location
+        is a locator rather than a number.
+        """
+        return {
+            'id': 'threeds/level-5/crimson-shroud',
+            'platform': 'threeds',
+            'title': 'Crimson Shroud',
+            'address_spaces': [
+                {'id': 'rom', 'kind': 'file'},
+                {'id': 'romfs', 'kind': 'member', 'params': {'parent': 'rom'}},
+                {'id': 'mbin', 'kind': 'member', 'params': {'parent': 'romfs'}},
+            ],
+            'tables': [
+                {
+                    'id': 'messages', 'space': 'mbin', 'format': 'msgb',
+                    'kind': 'offset_size', 'stride': 0x10, 'endian': 'little',
+                    'alignment': 4, 'applies_to': list(MSG_FILES),
+                    'at': {'kind': 'read', 'space': 'mbin', 'at': 4,
+                           'width': 4, 'endian': 'little'},
+                    'count': {'space': 'mbin', 'at': 8, 'width': 4, 'endian': 'little'},
+                    'base': {'kind': 'member_start'},
+                    'payload': 'text', 'encoding': 'utf-16-le',
+                    'name_source': 'offset_table',
+                },
+                {
+                    'id': 'keys', 'space': 'mbin', 'format': 'msgb',
+                    'kind': 'offset_only', 'stride': 4, 'endian': 'little',
+                    'alignment': 0x10,
+                    'at': {'kind': 'read', 'space': 'mbin', 'at': 0x10,
+                           'width': 4, 'endian': 'little'},
+                    'count': {'space': 'mbin', 'at': 8, 'width': 4, 'endian': 'little'},
+                    'base': {'kind': 'member_start'},
+                    'payload': 'text', 'encoding': 'ascii',
+                    'name_source': 'none',
+                },
+            ],
+            'measured': [
+                "magic 'msgb' at 0x00",
+                'header: entry table offset, entry count, unknown u32, key table offset '
+                'as four little-endian u32 at 0x04',
+                'bytes 0x14..0x20 carried opaque; the reader cannot reproduce them',
+                'entry row 0x10 bytes: two flag u32, string offset, byte length',
+                'strings UTF-16-LE, NUL terminated, each padded to 4',
+                'key table: one u32 offset per entry, pointing at an ASCII NUL '
+                'terminated name',
+            ],
+        }

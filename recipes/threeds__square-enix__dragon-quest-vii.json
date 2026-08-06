@@ -1,0 +1,76 @@
+{
+ "address_spaces": [
+  {
+   "id": "rom",
+   "kind": "file"
+  },
+  {
+   "id": "romfs",
+   "kind": "member",
+   "params": {
+    "parent": "rom"
+   }
+  },
+  {
+   "id": "fpt",
+   "kind": "member",
+   "params": {
+    "parent": "romfs"
+   }
+  }
+ ],
+ "id": "threeds/square-enix/dragon-quest-vii",
+ "platform": "threeds",
+ "provenance": {
+  "independent_measurement": [
+   "magic 'FPT0' at 0x00",
+   "u32 at 0x04 is 0 in all 345 containers; refused otherwise",
+   "u32 entry count at 0x08",
+   "u32 version at 0x0C is 1 in all 345 containers; refused otherwise",
+   "entry row 32 bytes: 16 byte ASCII name, name key, data offset, length, reserved u32 that is 0 in all 66253 entries",
+   "name key = (len(name) << 24) | (poly13(name) & 0xFFFFFF), validated against all 66253 names and all 345 tag strings",
+   "a 64 byte tag block sits between the table and the payloads",
+   "entry data offsets are relative to the payload region, not the member",
+   "residual ambiguity: every name is 10 or 11 characters, so a length byte cannot be told from a constant by observation alone"
+  ]
+ },
+ "schema_version": {
+  "major": 1,
+  "minor": 0
+ },
+ "tables": [
+  {
+   "alignment": 1,
+   "applies_to": [
+    "MESS",
+    "LAYOUT"
+   ],
+   "at": {
+    "kind": "const",
+    "space": "fpt",
+    "value": 16
+   },
+   "base": {
+    "kind": "after_table",
+    "padding": 64
+   },
+   "count": {
+    "at": 8,
+    "endian": "little",
+    "space": "fpt",
+    "width": 4
+   },
+   "endian": "little",
+   "format": "fpt0",
+   "id": "entries",
+   "kind": "offset_size",
+   "name_source": "inline",
+   "payload": "opaque",
+   "space": "fpt",
+   "stride": 32
+  }
+ ],
+ "title": {
+  "name": "Dragon Quest VII"
+ }
+}

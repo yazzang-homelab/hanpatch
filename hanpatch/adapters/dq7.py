@@ -500,3 +500,49 @@ class DragonQuest7(adapter.Adapter):
                         f'slots in the rebuilt RomFS')
         self.checked = checked
         return problems
+
+    def recipe_facts(self):
+        """What `FPT0` actually looks like, measured over 345 containers and
+        66253 entries by the reader in `formats/fpt0.py`.
+
+        Each entry's data offset is relative to the start of the payload
+        region, and that region begins after the entry table and a 64-byte tag
+        block - so the anchor is computed from the count, not from the member
+        start. No union of {member_start, const, mapper} can say that.
+        """
+        return {
+            'id': 'threeds/square-enix/dragon-quest-vii',
+            'platform': 'threeds',
+            'title': 'Dragon Quest VII',
+            'address_spaces': [
+                {'id': 'rom', 'kind': 'file'},
+                {'id': 'romfs', 'kind': 'member', 'params': {'parent': 'rom'}},
+                {'id': 'fpt', 'kind': 'member', 'params': {'parent': 'romfs'}},
+            ],
+            'tables': [
+                {
+                    'id': 'entries', 'space': 'fpt', 'format': 'fpt0',
+                    'kind': 'offset_size', 'stride': fpt0.ENTRY, 'endian': 'little',
+                    'alignment': 1, 'applies_to': [MESS_DIR, LAYOUT_DIR],
+                    'at': {'kind': 'const', 'space': 'fpt', 'value': fpt0.HEADER},
+                    'count': {'space': 'fpt', 'at': 8, 'width': 4, 'endian': 'little'},
+                    'base': {'kind': 'after_table', 'padding': fpt0.TAG},
+                    'payload': 'opaque',
+                    'name_source': 'inline',
+                },
+            ],
+            'measured': [
+                "magic 'FPT0' at 0x00",
+                'u32 at 0x04 is 0 in all 345 containers; refused otherwise',
+                'u32 entry count at 0x08',
+                'u32 version at 0x0C is 1 in all 345 containers; refused otherwise',
+                'entry row 32 bytes: 16 byte ASCII name, name key, data offset, '
+                'length, reserved u32 that is 0 in all 66253 entries',
+                'name key = (len(name) << 24) | (poly13(name) & 0xFFFFFF), validated '
+                'against all 66253 names and all 345 tag strings',
+                'a 64 byte tag block sits between the table and the payloads',
+                'entry data offsets are relative to the payload region, not the member',
+                'residual ambiguity: every name is 10 or 11 characters, so a length '
+                'byte cannot be told from a constant by observation alone',
+            ],
+        }

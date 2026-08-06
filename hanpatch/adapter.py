@@ -97,6 +97,16 @@ class Adapter(abc.ABC):
         """(source_fonts, built_fonts) used for width measurement."""
         return ([], [])
 
+    def recipe_facts(self):
+        """Observed container facts, or None when this adapter has not been
+        reduced to a recipe yet.
+
+        The default keeps existing adapters working untouched: an adapter that
+        has never been asked where its text lives says so, rather than having a
+        plausible answer invented for it.
+        """
+        return None
+
 
 def project_adapter():
     from hanpatch import config

@@ -1,0 +1,114 @@
+{
+ "address_spaces": [
+  {
+   "id": "rom",
+   "kind": "file"
+  },
+  {
+   "id": "romfs",
+   "kind": "member",
+   "params": {
+    "parent": "rom"
+   }
+  },
+  {
+   "id": "mbin",
+   "kind": "member",
+   "params": {
+    "parent": "romfs"
+   }
+  }
+ ],
+ "id": "threeds/level-5/crimson-shroud",
+ "platform": "threeds",
+ "provenance": {
+  "independent_measurement": [
+   "magic 'msgb' at 0x00",
+   "header: entry table offset, entry count, unknown u32, key table offset as four little-endian u32 at 0x04",
+   "bytes 0x14..0x20 carried opaque; the reader cannot reproduce them",
+   "entry row 0x10 bytes: two flag u32, string offset, byte length",
+   "strings UTF-16-LE, NUL terminated, each padded to 4",
+   "key table: one u32 offset per entry, pointing at an ASCII NUL terminated name"
+  ]
+ },
+ "schema_version": {
+  "major": 1,
+  "minor": 0
+ },
+ "tables": [
+  {
+   "alignment": 4,
+   "applies_to": [
+    "arms",
+    "arms_help",
+    "battle",
+    "common",
+    "dialogue",
+    "ending",
+    "item",
+    "magic",
+    "region",
+    "stage1",
+    "system",
+    "title",
+    "unit"
+   ],
+   "at": {
+    "at": 4,
+    "endian": "little",
+    "kind": "read",
+    "space": "mbin",
+    "width": 4
+   },
+   "base": {
+    "kind": "member_start"
+   },
+   "count": {
+    "at": 8,
+    "endian": "little",
+    "space": "mbin",
+    "width": 4
+   },
+   "encoding": "utf-16-le",
+   "endian": "little",
+   "format": "msgb",
+   "id": "messages",
+   "kind": "offset_size",
+   "name_source": "offset_table",
+   "payload": "text",
+   "space": "mbin",
+   "stride": 16
+  },
+  {
+   "alignment": 16,
+   "at": {
+    "at": 16,
+    "endian": "little",
+    "kind": "read",
+    "space": "mbin",
+    "width": 4
+   },
+   "base": {
+    "kind": "member_start"
+   },
+   "count": {
+    "at": 8,
+    "endian": "little",
+    "space": "mbin",
+    "width": 4
+   },
+   "encoding": "ascii",
+   "endian": "little",
+   "format": "msgb",
+   "id": "keys",
+   "kind": "offset_only",
+   "name_source": "none",
+   "payload": "text",
+   "space": "mbin",
+   "stride": 4
+  }
+ ],
+ "title": {
+  "name": "Crimson Shroud"
+ }
+}
