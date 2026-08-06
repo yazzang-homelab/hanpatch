@@ -193,6 +193,41 @@ def publish(api, pr, decision, body):
         api.post('/repos/%s/issues/%d/comments' % (api.repo, pr.number), {'body': body})
 
 
+def describe_change(api, number, head_sha):
+    """The facts the owner needs to judge a pull request from a phone.
+
+    Counted, never summarised by a model: a language model writing the summary
+    would put an unverifiable authority in the exact place this project has
+    decided to keep human.
+    """
+    from tools.telegram_approval import Change
+
+    pull = api.get('/repos/%s/pulls/%d' % (api.repo, number)) or {}
+    files, _ = api.page('/repos/%s/pulls/%d/files' % (api.repo, number))
+    commits, _ = api.page('/repos/%s/pulls/%d/commits' % (api.repo, number))
+
+    checks = []
+    for status in (api.get('/repos/%s/commits/%s/status' % (api.repo, head_sha))
+                   or {}).get('statuses', []):
+        if status.get('context') != CONTEXT:
+            checks.append((status.get('context', ''), status.get('state', '')))
+    runs = api.get('/repos/%s/commits/%s/check-runs' % (api.repo, head_sha)) or {}
+    for run in runs.get('check_runs', []):
+        checks.append((run.get('name', ''), run.get('conclusion') or run.get('status', '')))
+
+    return pull.get('title', ''), Change(
+        files=len(files),
+        additions=sum(f.get('additions', 0) for f in files),
+        deletions=sum(f.get('deletions', 0) for f in files),
+        paths=[f.get('filename', '') for f in files],
+        commit_titles=[((c.get('commit') or {}).get('message') or '').splitlines()[0]
+                       for c in commits if (c.get('commit') or {}).get('message')],
+        body=pull.get('body') or '',
+        checks=checks,
+    )
+
+
+
 def ask_owner(api, pr, cfg, decision):
     """Put the question on the owner's phone and wait for the tap.
 
@@ -222,11 +257,12 @@ def ask_owner(api, pr, cfg, decision):
         return decision
 
     url = 'https://github.com/%s/pull/%d' % (api.repo, pr.number)
-    title = (api.get('/repos/%s/pulls/%d' % (api.repo, pr.number)) or {}).get('title', '')
+    title, change = describe_change(api, pr.number, pr.head_sha)
     bot = Telegram(bot_token)
     message_id = bot.send(chat_id, compose(pr.number, pr.head_sha, url,
                                            decision.reasons, decision.agent_evidence,
-                                           title=title, author=pr.author_login),
+                                           title=title, author=pr.author_login,
+                                           change=change),
                           keyboard(pr.number, pr.head_sha))
     print('asked the owner on telegram (message %s)' % message_id)
 
@@ -235,7 +271,7 @@ def ask_owner(api, pr, cfg, decision):
 
     if tap is None:
         bot.settle(chat_id, message_id,
-                   '*개죽이* — PR #%d 응답 없음. GitHub에서 직접 승인하십시오.\n%s'
+                   '개죽이 — PR #%d 응답 없음. GitHub에서 직접 승인하십시오.\n%s'
                    % (pr.number, url))
         print('no tap within %ds; still pending' % wait)
         return decision
@@ -243,7 +279,7 @@ def ask_owner(api, pr, cfg, decision):
     if not tap.accepted:
         bot.answer(tap.callback_id, tap.reason)
         bot.settle(tap.chat_id, tap.message_id,
-                   '*개죽이* — PR #%d 승인되지 않음: %s\n%s' % (pr.number, tap.reason, url))
+                   '개죽이 — PR #%d 승인되지 않음: %s\n%s' % (pr.number, tap.reason, url))
         print('tap refused: %s' % tap.reason)
         return decision
 
@@ -251,7 +287,7 @@ def ask_owner(api, pr, cfg, decision):
     if not owner_token:
         bot.answer(tap.callback_id, 'OWNER_TOKEN 시크릿이 없어 승인을 기록할 수 없습니다')
         bot.settle(tap.chat_id, tap.message_id,
-                   '*개죽이* — PR #%d 승인 기록 실패: `OWNER_TOKEN` 시크릿 없음.\n%s'
+                   '개죽이 — PR #%d 승인 기록 실패: OWNER_TOKEN 시크릿 없음.\n%s'
                    % (pr.number, url))
         print('OWNER_TOKEN is missing; a tap cannot be recorded')
         return decision
@@ -264,7 +300,7 @@ def ask_owner(api, pr, cfg, decision):
     fresh = fetch(api, pr.number, cfg)
     verdict = evaluate(fresh, cfg)
     bot.settle(tap.chat_id, tap.message_id,
-               '*개죽이* — PR #%d %s\n%s'
+               '개죽이 — PR #%d %s\n%s'
                % (pr.number, '승인 완료' if verdict.state == SUCCESS else '아직 대기', url))
     publish(api, fresh, verdict, render(fresh, verdict, cfg))
     return verdict

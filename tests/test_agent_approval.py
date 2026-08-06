@@ -396,6 +396,75 @@ case('an unrelated update is confirmed rather than replayed forever',
      wait_for_tap(_noise, 1, HEAD, OWNER, deadline=3,
                   clock=lambda: next(_ticks2)) is None and _noise.offsets[1] == 5)
 
+sec('the message tells the owner what the change actually does')
+
+from tools.telegram_approval import Change, buckets, signals  # noqa: E402
+
+MIXED = ['hanpatch/cli.py', 'tests/test_cli.py', 'README.md',
+         '.github/workflows/ci.yml', 'profiles/x.json', 'work/blob.bin']
+case('a test file is a test, not code',
+     dict(buckets(MIXED))['테스트'] == 1 and dict(buckets(MIXED))['코드'] == 1)
+case('a workflow is a workflow, not configuration',
+     dict(buckets(MIXED))['워크플로'] == 1 and dict(buckets(MIXED))['설정'] == 1)
+case('anything unrecognised is still counted', dict(buckets(MIXED))['기타'] == 1)
+case('nothing changed means nothing to group', buckets([]) == [])
+
+_good, _warn = signals(Change(files=2, additions=40, deletions=5,
+                              paths=['hanpatch/cli.py', 'tests/test_cli.py'],
+                              checks=[('ci', 'success')]))
+case('tests arriving with code is worth saying', '테스트가 같이 들어왔습니다' in _good)
+case('a small change is worth saying', any('작습니다' in g for g in _good))
+case('passing checks are worth saying', '자동 검사는 전부 통과했습니다' in _good)
+case('a clean change raises nothing', _warn == [])
+
+_good, _warn = signals(Change(files=1, additions=30, deletions=0,
+                              paths=['hanpatch/cli.py']))
+case('code without tests is a warning', '코드는 바뀌는데 테스트는 그대로입니다' in _warn)
+
+for path, needle in (('.github/workflows/agent-approval.yml', '검문소'),
+                     ('.github/agent-identities.json', '누구를 AI로'),
+                     ('.github/CODEOWNERS', '누가 책임'),
+                     ('tools/agent_approval.py', '승인 게이트의 코드'),
+                     ('tools/telegram_approval.py', '이 알림을 보내는 코드')):
+    case('touching %s is called out' % path,
+         any(needle in w for w in signals(Change(files=1, paths=[path]))[1]))
+
+case('a failing check is a warning',
+     any('실패' in w for w in signals(Change(files=1, paths=['a.py'],
+                                            checks=[('ci', 'failure')]))[1]))
+case('a check still running is not called passing',
+     '자동 검사는 전부 통과했습니다' not in signals(
+         Change(files=1, paths=['a.py'], checks=[('ci', 'in_progress')]))[0])
+case('a huge change is a warning',
+     any('큽니다' in w for w in signals(Change(files=40, additions=900, deletions=100,
+                                             paths=['a.py'] * 40))[1]))
+case('a change that mostly deletes is a warning',
+     any('지운 줄' in w for w in signals(Change(files=1, additions=2, deletions=300,
+                                             paths=['a.py']))[1]))
+
+_full = compose(3, HEAD, 'https://github.com/y/h/pull/3', ('0 of 1 human approvals',),
+                ('commit %s author=bot@gajae.dev' % HEAD[:12],),
+                title='gate: 개죽이 carries the question',
+                author='yazzang-homelab',
+                change=Change(files=2, additions=120, deletions=4,
+                              paths=['tools/telegram_approval.py',
+                                     'tests/test_agent_approval.py'],
+                              commit_titles=['gate: ask the owner on telegram'],
+                              body='형님 폰으로 개죽이가 메시지를 보냅니다.',
+                              checks=[]))
+for heading in ('무엇을 하는 PR인가', '무엇이 바뀌나', '봐야 할 점', '검사 결과'):
+    case('the message has a %s section' % heading, heading in _full)
+case('it counts the lines', '+120 −4' in _full)
+case('it names the changed files', 'tools/telegram_approval.py' in _full)
+case('it says plainly that no other bot has reviewed this',
+     '아직 다른 자동 검사가 없습니다' in _full)
+case('it warns that this change touches the notifier itself',
+     '이 알림을 보내는 코드' in _full)
+case('it stays inside one telegram message', len(_full) < 4096)
+case('it uses no markdown that a file path could break',
+     '*' not in _full and '_' not in _full.split('https://')[0].replace(
+         'tools/telegram_approval.py', '').replace('tests/test_agent_approval.py', ''))
+
 print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed')
 if FAIL:
