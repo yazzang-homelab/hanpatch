@@ -15,6 +15,18 @@
 3. **Never widen a gate to make a build pass.** Fix the translation, or record a
    waiver with a category and a real reason.
 4. **Adapters must not import the wording layer.** The test suite enforces this.
+5. **An agent commits under its own name.** Work written by a coding agent must
+   carry an identity listed in `.github/agent-identities.json`:
+
+   ```bash
+   git -c user.name='gjc-agent' -c user.email='bot@gajae.dev' commit
+   ```
+
+   `agent-approval-check` decides whether a pull request needs human approval by
+   reading commit authorship. An agent that commits under a human's name is
+   invisible to it, and the gate then passes for the wrong reason — the one
+   failure mode this whole mechanism exists to prevent. The identity is a claim
+   the agent makes about its own work; nothing can recover it after the fact.
 
 ## Adding a title
 
@@ -38,4 +50,7 @@ The core must not change.
 ```bash
 python3 tests/test_gates.py
 HANPATCH_PROJECT=/path/to/project python3 tests/test_gates.py
+python3 tests/test_agent_approval.py
 ```
+
+The approval gate has no corpus and no network, so it runs anywhere.
