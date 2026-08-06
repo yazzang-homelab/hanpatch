@@ -1,0 +1,43 @@
+# A pull request carrying agent-written commits needs human approvals before
+# it can merge.  A pull request written entirely by people is untouched.
+#
+# `pull_request_target` and `issue_comment` run the workflow file from the
+# base branch, so the pull request under review cannot edit its own gate.
+# `pull_request_review` is deliberately absent: it runs from the merge ref,
+# which the author controls.  A native Approve is picked up on the next push
+# or `/approve` comment instead.
+#
+# This assumes `.github/workflows/**` is itself protected.  Anyone who can
+# push a workflow to the base branch can forge any required status.
+name: agent-approval-check
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      # The default ref under pull_request_target is the base branch.  Never
+      # check out the pull request head: it would hand the author control of
+      # both the identity list and this gate's own code.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - run: python3 tools/agent_approval_ci.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

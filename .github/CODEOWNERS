@@ -1,0 +1,23 @@
+# Later rules win, so the narrow paths sit at the bottom.
+#
+# This repository belongs to a user account, not an organisation, so there are
+# no teams to name here - only the owner. The point of the file is not
+# bureaucracy: the paths below are the ones an agent could use to widen its own
+# permissions, and naming them makes a review of those paths mandatory rather
+# than remembered.
+
+*                               @yazzang-homelab
+
+# Anyone who can push a workflow can forge any required status check.
+/.github/                       @yazzang-homelab
+
+# The identity list this gate is judged by.
+/.github/agent-identities.json  @yazzang-homelab
+
+# The gate itself.
+/tools/agent_approval.py        @yazzang-homelab
+/tools/agent_approval_ci.py     @yazzang-homelab
+
+# Format and container work is where a wrong byte is silent.
+/hanpatch/formats/              @yazzang-homelab
+/hanpatch/adapters/             @yazzang-homelab

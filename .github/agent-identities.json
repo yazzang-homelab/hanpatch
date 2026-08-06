@@ -1,0 +1,18 @@
+{
+  "_comment": "Read from the base branch by tools/agent_approval_ci.py. A pull request cannot change the rules it is judged by, so this file is owner-reviewed via CODEOWNERS.",
+  "required_approvals": 1,
+  "agent_emails": [
+    "noreply@anthropic.com",
+    "bot@gajae.dev"
+  ],
+  "agent_logins": [
+    "claude[bot]",
+    "claude-code[bot]",
+    "github-actions[bot]"
+  ],
+  "excluded_approvers": [],
+  "protected_bases": [
+    "main"
+  ],
+  "exempt_path_prefixes": []
+}
