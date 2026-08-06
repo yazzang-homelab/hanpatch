@@ -22,8 +22,12 @@ permissions:
   pull-requests: write
   statuses: write
 
+# Repository-wide, not per pull request. The waiting job polls Telegram, and
+# getUpdates hands each update to whichever reader asks first, so two jobs
+# waiting at once would steal each other's taps. One question on the phone at a
+# time; the newest one wins, and a push still cancels the question it answered.
 concurrency:
-  group: agent-approval-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: agent-approval
   cancel-in-progress: true
 
 jobs:

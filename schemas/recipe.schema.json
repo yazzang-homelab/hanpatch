@@ -1,0 +1,333 @@
+{
+ "$id": "https://github.com/yazzang-homelab/hanpatch/schemas/recipe.schema.json",
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "additionalProperties": false,
+ "properties": {
+  "address_spaces": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "file",
+       "member",
+       "lba-2048",
+       "lba-2352-form1",
+       "lba-2352-form2",
+       "gba-rom",
+       "snes-lorom",
+       "snes-hirom",
+       "decompressed-iso",
+       "message-id"
+      ]
+     },
+     "params": {
+      "type": "object"
+     }
+    },
+    "required": [
+     "id",
+     "kind"
+    ],
+    "type": "object"
+   },
+   "minItems": 1,
+   "type": "array"
+  },
+  "id": {
+   "pattern": "^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*){2}$",
+   "type": "string"
+  },
+  "platform": {
+   "type": "string"
+  },
+  "provenance": {
+   "type": "object"
+  },
+  "schema_version": {
+   "additionalProperties": false,
+   "properties": {
+    "major": {
+     "const": 1
+    },
+    "minor": {
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "major",
+    "minor"
+   ],
+   "type": "object"
+  },
+  "tables": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "alignment": {
+      "minimum": 1,
+      "type": "integer"
+     },
+     "applies_to": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "at": {
+      "oneOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "const"
+         },
+         "space": {
+          "type": "string"
+         },
+         "value": {
+          "minimum": 0,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "kind",
+         "space",
+         "value"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "minimum": 0,
+          "type": "integer"
+         },
+         "endian": {
+          "enum": [
+           "little",
+           "big"
+          ]
+         },
+         "kind": {
+          "const": "read"
+         },
+         "space": {
+          "type": "string"
+         },
+         "width": {
+          "enum": [
+           1,
+           2,
+           4,
+           8
+          ]
+         }
+        },
+        "required": [
+         "kind",
+         "space",
+         "at",
+         "width",
+         "endian"
+        ],
+        "type": "object"
+       }
+      ]
+     },
+     "base": {
+      "oneOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "member_start"
+         }
+        },
+        "required": [
+         "kind"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "const"
+         },
+         "space": {
+          "type": "string"
+         },
+         "value": {
+          "type": "integer"
+         }
+        },
+        "required": [
+         "kind",
+         "space",
+         "value"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "id": {
+          "enum": [
+           "file",
+           "member",
+           "lba-2048",
+           "lba-2352-form1",
+           "lba-2352-form2",
+           "gba-rom",
+           "snes-lorom",
+           "snes-hirom",
+           "decompressed-iso",
+           "message-id"
+          ]
+         },
+         "kind": {
+          "const": "mapper"
+         }
+        },
+        "required": [
+         "kind",
+         "id"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "after_table"
+         },
+         "padding": {
+          "minimum": 0,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "kind",
+         "padding"
+        ],
+        "type": "object"
+       }
+      ]
+     },
+     "count": {
+      "additionalProperties": false,
+      "properties": {
+       "at": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "endian": {
+        "enum": [
+         "little",
+         "big"
+        ]
+       },
+       "space": {
+        "type": "string"
+       },
+       "width": {
+        "enum": [
+         1,
+         2,
+         4,
+         8
+        ]
+       }
+      },
+      "required": [
+       "space",
+       "at",
+       "width",
+       "endian"
+      ],
+      "type": "object"
+     },
+     "encoding": {
+      "enum": [
+       "ascii",
+       "utf-8",
+       "utf-16-le",
+       "utf-16-be",
+       "shift-jis",
+       "euc-kr",
+       "table"
+      ]
+     },
+     "endian": {
+      "enum": [
+       "little",
+       "big"
+      ]
+     },
+     "format": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "offset_size",
+       "offset_only",
+       "inline_fixed"
+      ]
+     },
+     "name_source": {
+      "enum": [
+       "inline",
+       "offset_table",
+       "none"
+      ]
+     },
+     "payload": {
+      "enum": [
+       "opaque",
+       "text"
+      ]
+     },
+     "space": {
+      "type": "string"
+     },
+     "stride": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id",
+     "space",
+     "kind",
+     "at",
+     "count",
+     "base"
+    ],
+    "type": "object"
+   },
+   "minItems": 1,
+   "type": "array"
+  },
+  "title": {
+   "type": "object"
+  }
+ },
+ "required": [
+  "schema_version",
+  "id",
+  "platform",
+  "address_spaces",
+  "tables"
+ ],
+ "title": "hanpatch recipe v1.0",
+ "type": "object"
+}
