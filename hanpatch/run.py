@@ -88,12 +88,33 @@ def shipped_values(src, manifest_entries):
     return out
 
 
-def qa_reasons(flagged, shipped, floor):
+def judged_values(ledger):
+    """source -> the set of translations already judged for it.
+
+    One repair attempt is one new value: a repaired row is a new `pair_key` and arrives at
+    the panel with no verdicts, so the number of distinct judged values IS the number of
+    attempts that source has consumed.
+    """
+    tried = {}
+    for recs in ledger.values():
+        for rec in recs if isinstance(recs, list) else ():
+            if isinstance(rec, dict) and rec.get('en'):
+                tried.setdefault(rec['en'], set()).add(rec.get('ko'))
+    return tried
+
+
+def qa_reasons(flagged, shipped, floor, ledger=None, max_attempts=0):
     """source -> actionable judge complaints, from the `pair_key`-keyed QA review.
 
     A pair is listed when ANY of its records is flagged, so the passing records in the
     same list are not work. A complaint is dropped once the value it judged is no longer
     the shipped one, because a later repair already answered it.
+
+    With `max_attempts`, a source that has already been retranslated that many times is
+    left out: measured on DQ7 2026-08-05, 380 of 1734 badly flagged pairs had been through
+    three or more retranslations and were still badly flagged, and re-running the same
+    prompt on them only delayed the 1022 pairs that had been tried once. Those rows need a
+    decision, not another retry - `qa_stalled` is the list to decide on.
     """
     reasons = {}
     for recs in flagged.values():
@@ -107,7 +128,22 @@ def qa_reasons(flagged, shipped, floor):
             if not en or shipped.get(en) != rec.get('ko'):
                 continue
             reasons.setdefault(en, []).append(str(rec.get('r', '')).strip())
+    if ledger is not None and max_attempts:
+        tried = judged_values(ledger)
+        reasons = {en: r for en, r in reasons.items()
+                   if len(tried.get(en, ())) < max_attempts}
     return reasons
+
+
+def qa_stalled(flagged, shipped, floor, ledger, max_attempts):
+    """The complaints retranslation has stopped answering: attempts spent, still flagged."""
+    if not max_attempts:
+        return {}
+    tried = judged_values(ledger)
+    return {en: {'attempts': len(tried.get(en, ())), 'reasons': r}
+            for en, r in qa_reasons(flagged, shipped, floor).items()
+            if len(tried.get(en, ())) >= max_attempts}
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser()

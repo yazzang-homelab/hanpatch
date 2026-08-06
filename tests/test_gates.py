@@ -2009,6 +2009,35 @@ case('shipped values come from the manifest, not the raw memory',
                             {'f/k1': 'sealed'}) == {'src1': 'sealed'})
 case('a source with no manifest entry is not shippable and carries no verdict',
      _runmod.shipped_values({'f': [{'en': 'src1', 'key': 'k1'}]}, {}) == {})
+# The repair loop asks for an attempt cap. When `run` did not offer one the whole loop
+# died on TypeError at startup, was restarted by its supervisor every five minutes, and
+# the corpus sat unrepaired for two days while every log line said `repair=up`.
+_LEDGER = {'k1': [{'en': 'src1', 'ko': 'try1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'},
+                  {'en': 'src1', 'ko': 'try1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j2'}],
+           'k2': [{'en': 'src1', 'ko': 'try2', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'}],
+           'k3': [{'en': 'src1', 'ko': 'ko1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'}]}
+case('an attempt is a distinct judged value, not a verdict',
+     _runmod.judged_values(_LEDGER) == {'src1': {'try1', 'try2', 'ko1'}})
+case('a source that has spent its attempts is not queued again',
+     'src1' not in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                      ledger=_LEDGER, max_attempts=3))
+case('a source with attempts left is still queued',
+     'src1' in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                  ledger=_LEDGER, max_attempts=4))
+case('no cap means no source is withheld from repair',
+     'src1' in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4, ledger=_LEDGER))
+case('a stalled source is reported with the attempts it burned',
+     _runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 3)['src1']['attempts'] == 3)
+case('a source still inside the cap is not called stalled',
+     _runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 4) == {})
+case('the repair queue and the stalled list never overlap',
+     not (set(_runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                 ledger=_LEDGER, max_attempts=3))
+          & set(_runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 3))))
 
 print('== the judge panel is scaled by identity, not by spend ==')
 case('every Codex account on the machine is a judge identity',
