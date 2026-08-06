@@ -311,6 +311,91 @@ case('an existing marked comment is edited rather than duplicated',
      _api.patched and '/issues/comments/5' in _api.patched[0][0]
      and not any('/issues/1/comments' in p for p, _ in _api.posted))
 
+sec('the telegram button')
+
+from tools.telegram_approval import (  # noqa: E402
+    APPROVE, HOLD, button_data, compose, keyboard, read_tap, should_ask, wait_for_tap,
+)
+
+OWNER = '7731731210'
+
+
+def tap_update(action=APPROVE, sender=OWNER, number=1, sha=HEAD[:12]):
+    return {'callback_query': {'id': 'cb1', 'from': {'id': int(sender)},
+                               'message': {'message_id': 11, 'chat': {'id': int(OWNER)}},
+                               'data': '%s:%d:%s' % (action, number, sha)}}
+
+
+case('the owner tapping approve is an approval',
+     read_tap(tap_update(), 1, HEAD, OWNER).accepted is True)
+case('a stranger tapping approve is refused, not ignored',
+     read_tap(tap_update(sender='999'), 1, HEAD, OWNER).accepted is False)
+case('and the refusal says who it was',
+     '999' in read_tap(tap_update(sender='999'), 1, HEAD, OWNER).reason)
+case('a tap on a message written for an older head is refused',
+     read_tap(tap_update(sha=OLD[:12]), 1, HEAD, OWNER).accepted is False)
+case('and the refusal says the button was stale',
+     'stale' in read_tap(tap_update(sha=OLD[:12]), 1, HEAD, OWNER).reason)
+case('a tap meant for another pull request does not leak across',
+     read_tap(tap_update(number=2), 1, HEAD, OWNER).accepted is False)
+case('the hold button approves nothing',
+     read_tap(tap_update(action=HOLD), 1, HEAD, OWNER).accepted is False)
+case('an ordinary chat message is not a tap',
+     read_tap({'message': {'text': '/approve ' + HEAD}}, 1, HEAD, OWNER) is None)
+case('unknown callback data is not a tap',
+     read_tap({'callback_query': {'id': 'x', 'from': {'id': int(OWNER)},
+                                  'data': 'delete:1:' + HEAD[:12]}},
+              1, HEAD, OWNER) is None)
+case('the button carries the head sha it was written for',
+     button_data(APPROVE, 1, HEAD) == 'ok:1:' + HEAD[:12])
+case('and stays inside the 64 byte callback limit',
+     len(button_data(APPROVE, 999999, HEAD).encode()) <= 64)
+case('both buttons are offered',
+     len(keyboard(1, HEAD)['inline_keyboard'][0]) == 2)
+
+case('a stranger opening a pull request does not ring the phone',
+     should_ask('stranger', False, 'write')[0] is False)
+case('someone with write access does',
+     should_ask('yazzang-homelab', True, 'write')[0] is True)
+case('and the policy can be widened deliberately',
+     should_ask('stranger', False, 'all')[0] is True)
+
+_msg = compose(1, HEAD, 'https://github.com/x/y/pull/1', ('0 of 1 human approvals',),
+               ('commit %s author=bot@gajae.dev' % HEAD[:12],),
+               title='smoke: a commit written by an agent', author='yazzang-homelab')
+case('the message names the pull request and the head', '#1' in _msg and HEAD[:12] in _msg)
+case('the message names who opened it, because the repo is public',
+     'yazzang-homelab' in _msg)
+case('the message carries the link', 'https://github.com/x/y/pull/1' in _msg)
+
+
+class FakeBot:
+    """Hands back one batch of updates, then nothing."""
+
+    def __init__(self, batches):
+        self.batches = list(batches)
+        self.offsets = []
+
+    def updates(self, offset):
+        self.offsets.append(offset)
+        if not self.batches:
+            return [], None
+        batch = self.batches.pop(0)
+        return batch, (batch[-1]['update_id'] if batch else None)
+
+
+_bot = FakeBot([[dict(tap_update(), update_id=7)]])
+_ticks = iter([0, 1, 2, 3, 4])
+case('a tap in the first batch is returned',
+     wait_for_tap(_bot, 1, HEAD, OWNER, deadline=3,
+                  clock=lambda: next(_ticks)).accepted is True)
+
+_noise = FakeBot([[{'update_id': 4, 'message': {'text': 'hi'}}], []])
+_ticks2 = iter([0, 1, 2, 3, 4, 5])
+case('an unrelated update is confirmed rather than replayed forever',
+     wait_for_tap(_noise, 1, HEAD, OWNER, deadline=3,
+                  clock=lambda: next(_ticks2)) is None and _noise.offsets[1] == 5)
+
 print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed')
 if FAIL:

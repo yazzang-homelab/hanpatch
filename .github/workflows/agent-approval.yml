@@ -30,6 +30,8 @@ jobs:
   check:
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-latest
+    # The job outlives the gate itself because it waits for a tap on a phone.
+    timeout-minutes: 20
     steps:
       # The default ref under pull_request_target is the base branch.  Never
       # check out the pull request head: it would hand the author control of
@@ -41,3 +43,13 @@ jobs:
       - run: python3 tools/agent_approval_ci.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 개죽이 asks the owner on Telegram when the gate is pending and waits
+          # for the tap. A push cancels this job (see `concurrency` above), which
+          # is what we want: the question was about a commit that is no longer
+          # the head. Absent secrets simply mean no message is sent.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # A tap is recorded as an ordinary `/approve <sha>` comment by the
+          # owner, so it needs the owner's own credential; the workflow's own
+          # bot identity would never count toward this gate.
+          OWNER_TOKEN: ${{ secrets.OWNER_TOKEN }}

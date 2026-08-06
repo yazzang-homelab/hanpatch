@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -192,6 +193,83 @@ def publish(api, pr, decision, body):
         api.post('/repos/%s/issues/%d/comments' % (api.repo, pr.number), {'body': body})
 
 
+def ask_owner(api, pr, cfg, decision):
+    """Put the question on the owner's phone and wait for the tap.
+
+    A tap does not approve anything on its own: it posts the ordinary
+    `/approve <sha>` comment under the owner's own credential, and the gate is
+    then re-derived from the pull request as if the owner had typed it. Without
+    that credential the tap is refused out loud, because a comment written by
+    the workflow's own bot identity would never count - and a notification that
+    silently does nothing is worse than no notification.
+    """
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+    if not (bot_token and chat_id):
+        print('telegram not configured; leaving the pull request pending')
+        return decision
+
+    from tools.telegram_approval import (  # imported late: the gate must not need it
+        DEFAULT_WAIT_SECONDS, Telegram, compose, keyboard, should_ask, wait_for_tap,
+    )
+
+    policy = os.environ.get('TELEGRAM_NOTIFY_AUTHORS', 'write')
+    allowed, why = should_ask(pr.author_login,
+                              pr.write_access.get(pr.author_login.lower(), False),
+                              policy)
+    if not allowed:
+        print('not asking: %s' % why)
+        return decision
+
+    url = 'https://github.com/%s/pull/%d' % (api.repo, pr.number)
+    title = (api.get('/repos/%s/pulls/%d' % (api.repo, pr.number)) or {}).get('title', '')
+    bot = Telegram(bot_token)
+    message_id = bot.send(chat_id, compose(pr.number, pr.head_sha, url,
+                                           decision.reasons, decision.agent_evidence,
+                                           title=title, author=pr.author_login),
+                          keyboard(pr.number, pr.head_sha))
+    print('asked the owner on telegram (message %s)' % message_id)
+
+    wait = int(os.environ.get('TELEGRAM_WAIT_SECONDS', DEFAULT_WAIT_SECONDS))
+    tap = wait_for_tap(bot, pr.number, pr.head_sha, chat_id, time.time() + wait)
+
+    if tap is None:
+        bot.settle(chat_id, message_id,
+                   '*개죽이* — PR #%d 응답 없음. GitHub에서 직접 승인하십시오.\n%s'
+                   % (pr.number, url))
+        print('no tap within %ds; still pending' % wait)
+        return decision
+
+    if not tap.accepted:
+        bot.answer(tap.callback_id, tap.reason)
+        bot.settle(tap.chat_id, tap.message_id,
+                   '*개죽이* — PR #%d 승인되지 않음: %s\n%s' % (pr.number, tap.reason, url))
+        print('tap refused: %s' % tap.reason)
+        return decision
+
+    owner_token = os.environ.get('OWNER_TOKEN', '')
+    if not owner_token:
+        bot.answer(tap.callback_id, 'OWNER_TOKEN 시크릿이 없어 승인을 기록할 수 없습니다')
+        bot.settle(tap.chat_id, tap.message_id,
+                   '*개죽이* — PR #%d 승인 기록 실패: `OWNER_TOKEN` 시크릿 없음.\n%s'
+                   % (pr.number, url))
+        print('OWNER_TOKEN is missing; a tap cannot be recorded')
+        return decision
+
+    owner_api = Api(owner_token, api.repo, os.environ.get('GITHUB_API_URL'))
+    owner_api.post('/repos/%s/issues/%d/comments' % (api.repo, pr.number),
+                   {'body': '/approve %s' % pr.head_sha})
+    bot.answer(tap.callback_id, '승인했습니다')
+
+    fresh = fetch(api, pr.number, cfg)
+    verdict = evaluate(fresh, cfg)
+    bot.settle(tap.chat_id, tap.message_id,
+               '*개죽이* — PR #%d %s\n%s'
+               % (pr.number, '승인 완료' if verdict.state == SUCCESS else '아직 대기', url))
+    publish(api, fresh, verdict, render(fresh, verdict, cfg))
+    return verdict
+
+
 def main():
     token = os.environ.get('GITHUB_TOKEN', '')
     repo = os.environ.get('GITHUB_REPOSITORY', '')
@@ -219,6 +297,8 @@ def main():
         return 0
 
     publish(api, pr, decision, render(pr, decision, cfg))
+    if decision.state == PENDING:
+        decision = ask_owner(api, pr, cfg, decision)
     print('%s: %s' % (decision.state, '; '.join(decision.reasons)))
     return 0
 
