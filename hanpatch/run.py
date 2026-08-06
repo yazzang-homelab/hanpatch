@@ -157,6 +157,10 @@ def main(argv=None):
                     help='re-translate entries whose current value fails validation')
     ap.add_argument('--qafail', action='store_true',
                     help='re-translate entries the semantic QA judge flagged')
+    ap.add_argument('--qa-list', default='',
+                    help='precomputed source -> complaints map for --qafail '
+                         '(hanpatch.run.qa_reasons output); skips re-reading the verdict '
+                         'file, which is the whole cost when one process runs per family')
     args = ap.parse_args(argv)
 
     providers.load_dotenv()
@@ -169,15 +173,24 @@ def main(argv=None):
     if args.qafail:
         from hanpatch import manifest as manmod
         from hanpatch import qagate
-        flagged = config.load_object(config.out('qa_flagged.json'),
-                                     'the QA flagged review')
-        man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
-        reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR)
-        # Make a no-op visible. This pass once matched nothing because the review file is
-        # keyed by pair, not by source, and it still reported success per family; the two
-        # counts side by side turn that class of silent failure into something a log shows.
-        print(f'qa review: {len(flagged)} flagged pairs, '
-              f'{len(reasons)} sources actionable', flush=True)
+        if args.qa_list:
+            # One process per family times an 80MB verdict file - read twice, because the
+            # loader verifies what it read - was 120s of the 135s a family took, for an
+            # answer identical in all 300 of them. The caller computes it once.
+            reasons = config.load_object(args.qa_list, 'the QA actionable list')
+            print(f'qa review: {len(reasons)} sources actionable '
+                  f'(from {args.qa_list})', flush=True)
+        else:
+            flagged = config.load_object(config.out('qa_flagged.json'),
+                                         'the QA flagged review')
+            man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
+            reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR)
+            # Make a no-op visible. This pass once matched nothing because the review file
+            # is keyed by pair, not by source, and it still reported success per family;
+            # the two counts side by side turn that class of silent failure into something
+            # a log shows.
+            print(f'qa review: {len(flagged)} flagged pairs, '
+                  f'{len(reasons)} sources actionable', flush=True)
         todo = []
         seen = set()
         for it in src[args.family]:

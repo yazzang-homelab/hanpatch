@@ -2038,6 +2038,40 @@ case('the repair queue and the stalled list never overlap',
      not (set(_runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
                                  ledger=_LEDGER, max_attempts=3))
           & set(_runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 3))))
+# The repair loop runs one `hanpatch translate` per family and hands it the actionable map
+# it already computed. Without the option every one of those 332 processes re-read - and
+# re-verified - an 80MB verdict file for an identical answer, 120s of the 135s a family
+# took; with the option missing from the parser, argparse rejected the whole command and
+# the loop repaired nothing at all.
+_cli_src = open(os.path.join(ROOT, 'hanpatch/cli.py')).read()
+case('the translate CLI accepts a precomputed QA list',
+     "'--qa-list'" in _cli_src and 'qa_list' in _cli_src)
+
+
+def _translate_argv(**kw):
+    import argparse as _ap
+    from hanpatch import cli as _cli
+    seen = {}
+    real = _runmod.main
+    try:
+        _runmod.main = lambda argv: seen.setdefault('argv', argv) and 0
+        _cli.cmd_translate(_ap.Namespace(family='f', models='', limit=0, workers=0,
+                                         batch=0, refail=False, qafail=True, **kw))
+    finally:
+        _runmod.main = real
+    return seen.get('argv', [])
+
+
+case('the precomputed list reaches the translate runner',
+     '--qa-list' in _translate_argv(qa_list='/tmp/actionable.json'))
+case('no list means the runner is not handed an empty path',
+     '--qa-list' not in _translate_argv(qa_list=''))
+# `--batch` is not an option of the runner: argparse abbreviation resolves it to
+# `--batch-chars`, so `--batch 8` silently capped a batch at eight CHARACTERS of source
+# and turned a 22-row family into 34 calls.
+case('the runner has no --batch to be mistaken for --batch-chars',
+     '--batch-chars' in open(os.path.join(ROOT, 'hanpatch/run.py')).read()
+     and "'--batch'," not in open(os.path.join(ROOT, 'hanpatch/run.py')).read())
 
 print('== the judge panel is scaled by identity, not by spend ==')
 case('every Codex account on the machine is a judge identity',

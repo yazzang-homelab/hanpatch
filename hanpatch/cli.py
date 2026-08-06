@@ -95,6 +95,8 @@ def cmd_translate(args):
         argv.append('--refail')
     if args.qafail:
         argv.append('--qafail')
+    if args.qa_list:
+        argv += ['--qa-list', args.qa_list]
     return run.main(argv) or 0
 
 
@@ -260,6 +262,9 @@ def main(argv=None):
     s.add_argument('--batch', type=int)
     s.add_argument('--refail', action='store_true')
     s.add_argument('--qafail', action='store_true')
+    s.add_argument('--qa-list', default='',
+                   help='precomputed actionable map for --qafail, so one process per '
+                        'family does not re-read the whole verdict file each time')
     s.set_defaults(fn=cmd_translate)
 
     s = sub.add_parser('fonts', help='build target-language fonts')
