@@ -37,6 +37,7 @@ from hanpatch import manifest as manmod  # noqa: E402
 from hanpatch import qa as qamod  # noqa: E402
 from hanpatch import qagate  # noqa: E402
 from hanpatch import qarelabel  # noqa: E402
+from hanpatch import qapurge  # noqa: E402
 from hanpatch import tm  # noqa: E402
 from hanpatch import wrap as _wrap  # noqa: E402
 from hanpatch import audit as _ad_audit  # noqa: E402
@@ -358,6 +359,33 @@ case('a revoked gateway lane is never dialled by a panel run',
      not [j for j in qamod.active_judges() if j in qamod.REVOKED_GATEWAY_LANES])
 case('every revoked lane is still a valid recorded identity',
      all(j in qamod.JUDGES for j in qamod.REVOKED_GATEWAY_LANES))
+# Bit-rot in the ledger is not a vote and must not be treated as one: a score of 70 on
+# this corpus blocked its pair permanently, because no number of clean judges can outvote
+# a record the gate reads as corruption. `qapurge` removes exactly those and nothing else
+# - a purge that could drop a defect verdict would be a way to launder a bad translation.
+_GOOD = _qamod.JUDGES[0]
+_PK = qamod.pair_key('en', 'ko')
+
+
+def _rec(judge=_GOOD, d='pass', a=5, f=5, en='en', ko='ko'):
+    return {'a': a, 'f': f, 'd': d, 'judge': judge, 'en': en, 'ko': ko, 'r': ''}
+
+
+case('a score outside 1..5 is damage, not a verdict',
+     qapurge.record_damage(_PK, _rec(a=70)) is not None)
+case('a record that does not hash to its own key is damage',
+     qapurge.record_damage(_PK, _rec(en='other')) is not None)
+case('a defect verdict is never purged',
+     qapurge.record_damage(_PK, _rec(d='defect', a=2)) is None)
+case('a clean verdict is never purged',
+     qapurge.record_damage(_PK, _rec()) is None)
+case('purging keeps the surviving verdicts of a partly damaged pair',
+     qapurge.purge({_PK: [_rec(a=70), _rec(d='defect', a=2)]})
+     == {_PK: [_rec(d='defect', a=2)]})
+case('a pair with nothing but damage is dropped, not left empty',
+     qapurge.purge({_PK: [_rec(a=70)]}) == {})
+case('purging is idempotent',
+     not qapurge.plan(qapurge.purge({_PK: [_rec(a=70), _rec()]}))[0])
 _pipe = open(os.path.join(ROOT, 'hanpatch/pipeline.py')).read()
 case('the packer requires the approved manifest digest',
      'approve(' in _pipe and 'SKIP_GATE' not in _pipe)
