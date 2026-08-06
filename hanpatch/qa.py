@@ -57,6 +57,18 @@ GATEWAY_JUDGES = ['agy:gemini-3-pro', 'agy:gemini-3-pro-biz',
                   'agy:gpt-oss-120b', 'agy:gpt-oss-120b-biz',
                   'agy:gemini-3-flash', 'agy:gemini-3-flash-biz',
                   'agy:claude-opus-4.6']
+# The `-biz` lanes above lied about which model answered: the agy-c (company) gateway
+# silently served "Gemini 3.6 Flash (High)" for every request, so the three names were one
+# model. `qarelabel` rewrites their recorded verdicts to that model; the lanes themselves
+# are never callable again (they are also what produced the 2026-08-03 metered bill).
+REVOKED_GATEWAY_LANES = ['agy:gemini-3-pro-biz',
+                         'agy:gpt-oss-120b-biz',
+                         'agy:gemini-3-flash-biz']
+# The model those verdicts actually came from. It is a JUDGE IDENTITY, not a runtime lane:
+# 39,236 relabelled verdicts name it, and a name the gate does not know is rejected as
+# `unknown judge`, which silently blocked 13,002 shipped pairs after the rename. It never
+# enters `active_judges()` - the account it lived on is retired.
+RETIRED_JUDGES = ['agy:gemini-3.6-flash']
 # Fallback order is a COST order: free rotators first, metered last. When all three Codex
 # accounts were momentarily parked, a paid-first list admitted `deepseek:deepseek-v4-pro`
 # for an entire run - about 4900k tokens of judging that the free lanes would have done.
@@ -97,7 +109,7 @@ def lane_model(lane_id):
     return name
 
 
-JUDGES = GATEWAY_JUDGES + codex_judges() + LEGACY_JUDGES
+JUDGES = GATEWAY_JUDGES + codex_judges() + LEGACY_JUDGES + RETIRED_JUDGES
 
 
 def active_judges():
@@ -108,8 +120,11 @@ def active_judges():
     models at a few seconds per call: a Codex-only panel is one model however many accounts
     answer, and the free rotators take 40-170s per call, which is hours per pass on a corpus
     this size. Codex follows as another model, and the rotators remain the last free resort.
+
+    The `-biz` lanes are excluded: they answered as one model under three names, which is
+    the opposite of what a panel is for, and they were metered.
     """
-    return GATEWAY_JUDGES + codex_judges() + [
+    return [s for s in GATEWAY_JUDGES if s not in REVOKED_GATEWAY_LANES] + codex_judges() + [
         s for s in LEGACY_JUDGES if not s.startswith('deepseek:')]
 
 SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.

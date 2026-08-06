@@ -49,8 +49,12 @@ def source_of(it):
     return en
 
 
-def verdict_problem(rec, en, ko, producer):
-    """None when the record is a schema-valid release pass."""
+def record_problem(rec, en, ko):
+    """None when the record is a well-formed verdict about this exact pair.
+
+    Everything here is integrity, not opinion: a record that fails one of these is
+    corrupt or forged, so it blocks whatever it says.
+    """
     if not isinstance(rec, dict):
         return 'not an object'
     for f in ('a', 'f', 'd', 'judge', 'en', 'ko'):
@@ -68,17 +72,36 @@ def verdict_problem(rec, en, ko, producer):
         return 'no judge recorded'
     if rec['judge'] not in JUDGES:
         return f'unknown judge {rec["judge"]!r}'
+    return None
+
+
+def disqualified(rec, producer):
+    """Why this verdict is not evidence, or None.
+
+    The rule is about the MODEL, not the account or the endpoint. Comparing lane ids
+    let a sibling account of the producing model grade its own output: measured on
+    this corpus, 25123 of 54071 shipped pairs carried such a verdict.
+    """
     if producer and lane_model(rec['judge']) == lane_model(producer):
-        # The rule is about the MODEL, not the account or the endpoint. Comparing lane ids
-        # let a sibling account of the producing model grade its own output: measured on
-        # this corpus, 25123 of 54071 shipped pairs carried such a verdict.
         return (f'judged by its own model '
                 f'({lane_model(producer)} via {rec["judge"]} for {producer})')
+    return None
+
+
+def finding_problem(rec):
+    """None when the judge reports a release-grade pass."""
     if rec['d'] != 'pass':
         return f'disposition={rec["d"]} ({str(rec.get("r", ""))[:60]})'
-    if min(a, f) < FLOOR:
-        return f'score below floor a={a} f={f}'
+    if min(int(rec['a']), int(rec['f'])) < FLOOR:
+        return f'score below floor a={rec["a"]} f={rec["f"]}'
     return None
+
+
+def verdict_problem(rec, en, ko, producer):
+    """None when the record is a schema-valid release pass from an eligible judge."""
+    return (record_problem(rec, en, ko)
+            or disqualified(rec, producer)
+            or finding_problem(rec))
 
 
 def panel_problem(recs, en, ko, producer):
@@ -89,17 +112,29 @@ def panel_problem(recs, en, ko, producer):
     two accounts of one model look like a panel: measured here, 25778 of 54071 shipped
     pairs were "double-judged" by a single model, and only 10463 carried two genuinely
     different models.
+
+    A verdict from the producing model is disqualified, not damning, and the asymmetry
+    matters: its PASS is self-serving and counts for nothing, while its DEFECT is an
+    admission against interest and still blocks. Treating the self-serving pass as a
+    blocking problem deadlocked 25152 shipped pairs here - `qa.main` already refuses to
+    count such a verdict toward coverage, so the sweep saw nothing to judge while the
+    gate stayed shut, and no repair could clear a record that is kept forever.
     """
     if not recs:
         return 'no verdict for this exact pair'
     models = set()
     for rec in recs:
-        p = verdict_problem(rec, en, ko, producer)
+        p = record_problem(rec, en, ko)
         if p is not None:
             return p
+        p = finding_problem(rec)
+        if p is not None:
+            return p
+        if disqualified(rec, producer) is not None:
+            continue
         models.add(lane_model(rec['judge']))
     if len(models) < REQUIRED_JUDGES:
-        return (f'only {len(models)} model(s) passed this pair, '
+        return (f'only {len(models)} independent model(s) passed this pair, '
                 f'{REQUIRED_JUDGES} required')
     return None
 

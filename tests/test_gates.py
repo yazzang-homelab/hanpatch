@@ -36,6 +36,7 @@ from hanpatch import josa  # noqa: E402
 from hanpatch import manifest as manmod  # noqa: E402
 from hanpatch import qa as qamod  # noqa: E402
 from hanpatch import qagate  # noqa: E402
+from hanpatch import qarelabel  # noqa: E402
 from hanpatch import tm  # noqa: E402
 from hanpatch import wrap as _wrap  # noqa: E402
 from hanpatch import audit as _ad_audit  # noqa: E402
@@ -318,6 +319,45 @@ case('a producer may not judge its own output',
                              'judge': _qamod.JUDGES[0], 'en': 'en',
                              'ko': 'ko'}, 'en', 'ko', _qamod.JUDGES[0])
      is not None)
+# The panel must separate "this verdict is not evidence" from "this verdict found a
+# defect". Conflating them deadlocked 25152 DQ7 pairs: the judging pass refuses to count
+# a verdict from the producing model toward coverage, so it reported nothing left to
+# judge, while the gate treated that same record as a permanent block that no repair
+# could clear (verdicts are kept forever by design).
+_P1 = 'agy:gemini-3-pro'
+_P2 = 'agy:claude-sonnet-4.6'
+_PROD = 'codex1:gpt-5.6-luna'
+_SELF = 'codex2:gpt-5.6-luna'          # a sibling ACCOUNT of the producing model
+
+
+def _v(judge, d='pass', a=5, f=5):
+    return {'a': a, 'f': f, 'd': d, 'judge': judge, 'en': 'en', 'ko': 'ko', 'r': ''}
+
+
+case('a self-serving pass does not veto an otherwise independent panel',
+     qagate.panel_problem([_v(_SELF), _v(_P1), _v(_P2)], 'en', 'ko', _PROD) is None)
+case('a self-serving pass is not counted toward the panel',
+     qagate.panel_problem([_v(_SELF), _v(_P1)], 'en', 'ko', _PROD) is not None)
+case('a pair judged only by its own model never passes',
+     qagate.panel_problem([_v(_SELF), _v(_PROD)], 'en', 'ko', _PROD) is not None)
+case('a defect from the producing model still blocks - it is against interest',
+     qagate.panel_problem([_v(_SELF, d='defect', a=2), _v(_P1), _v(_P2)],
+                          'en', 'ko', _PROD) is not None)
+case('a corrupt score blocks even when the judge is disqualified',
+     qagate.panel_problem([_v(_SELF, a=70), _v(_P1), _v(_P2)],
+                          'en', 'ko', _PROD) is not None)
+# The agy-c gateway answered every request as Gemini 3.6 Flash under three lane names.
+# `qarelabel` renames those verdicts to the model that actually answered, so that name has
+# to be a known judge identity - otherwise 39236 relabelled verdicts read as forgeries and
+# blocked 13002 shipped pairs - while the lanes themselves must never be callable again.
+case('the relabelled true identity is a known judge',
+     qarelabel.TRUE_IDENTITY in qamod.JUDGES)
+case('the retired identity is never dialled by a panel run',
+     qarelabel.TRUE_IDENTITY not in qamod.active_judges())
+case('a revoked gateway lane is never dialled by a panel run',
+     not [j for j in qamod.active_judges() if j in qamod.REVOKED_GATEWAY_LANES])
+case('every revoked lane is still a valid recorded identity',
+     all(j in qamod.JUDGES for j in qamod.REVOKED_GATEWAY_LANES))
 _pipe = open(os.path.join(ROOT, 'hanpatch/pipeline.py')).read()
 case('the packer requires the approved manifest digest',
      'approve(' in _pipe and 'SKIP_GATE' not in _pipe)
@@ -1946,8 +1986,10 @@ print('== the judge panel is scaled by identity, not by spend ==')
 case('every Codex account on the machine is a judge identity',
      _qamod.codex_judges()
      == [f'codex{a}:{_qamod.CODEX_MODEL}' for a in _prov.codex_accounts()])
+_LIVE_GATEWAY = [s for s in _qamod.GATEWAY_JUDGES
+                 if s not in _qamod.REVOKED_GATEWAY_LANES]
 case('the runtime panel leads with the flat-rate gateway models',
-     _qamod.active_judges()[:len(_qamod.GATEWAY_JUDGES)] == _qamod.GATEWAY_JUDGES)
+     _qamod.active_judges()[:len(_LIVE_GATEWAY)] == _LIVE_GATEWAY)
 case('a metered lane is never in the preferred runtime panel',
      not any(s.startswith('deepseek:') for s in _qamod.active_judges()))
 case('the preferred panel offers at least three independent models',
