@@ -222,6 +222,16 @@ Never delete a lane from the accepted-identity set to retire it. Verdicts alread
 by that lane are still true; separate the identity set from the runtime pool and change only
 the pool.
 
+The one case where deletion is correct is a lane that recorded **nothing**. A lane can also be
+worse than slow: a gateway account that serves one model for every model you ask for turns
+several lane names into a single opinion, which is the opposite of what a panel is for. Retire
+that by *deleting* the names, but only after proving no verdict carries them — count them in
+the ledger first, relabel any that exist to the model that actually answered, and keep that
+true model as an accepted identity, because the gate rejects an unknown judge and would
+otherwise read your own history as forgery. Leave the deleted names behind as a denylist with a
+test asserting they appear in neither the runtime pool nor the identity set, or they come back
+by copy-paste.
+
 ## Supervising a run nobody is watching
 
 A supervisor exists to notice that work stopped, so it must be harder to kill than the work
