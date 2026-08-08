@@ -47,16 +47,30 @@ def producers():
 # Panel identity set. A verdict recorded by any of these remains valid forever, so entries
 # are never removed - only the RUNTIME pool below changes.
 CODEX_MODEL = 'gpt-5.6-luna'
-# The gateway panel: three DIFFERENT model families, each on both accounts. Measured
-# round-trip on this box: 3-12s per call, versus 40-170s for the free rotators, and every
-# lane here is flat-rate. Two accounts of one model do not widen the panel - `lane_model`
-# collapses them - they only raise throughput, which is exactly what is wanted when the
-# same model must judge tens of thousands of pairs.
-GATEWAY_JUDGES = ['agy:gemini-3-pro', 'agy:gemini-3-pro-biz',
+# The gateway panel: DIFFERENT model families on the personal account. Measured round-trip on
+# this box: 3-12s per call, versus 40-170s for the free rotators, and every lane here is
+# flat-rate.
+GATEWAY_JUDGES = ['agy:gemini-3-pro',
                   'agy:claude-sonnet-4.6',
-                  'agy:gpt-oss-120b', 'agy:gpt-oss-120b-biz',
-                  'agy:gemini-3-flash', 'agy:gemini-3-flash-biz',
+                  'agy:gpt-oss-120b',
+                  'agy:gemini-3-flash',
                   'agy:claude-opus-4.6']
+# DELETED, not merely disabled. The `agy-c` (company) gateway served "Gemini 3.6 Flash (High)"
+# for every request regardless of the model asked for, so `agy:gemini-3-pro-biz`,
+# `agy:gpt-oss-120b-biz` and `agy:gemini-3-flash-biz` were one model wearing three names -
+# the exact opposite of what a panel exists to provide - and they are what produced the
+# 2026-08-03 metered bill. Deletion is safe rather than merely convenient because zero
+# verdicts carry a `-biz` judge name: `qarelabel` had already rewritten all 39,236 of them to
+# the model that actually answered. The names stay listed here as a denylist so they cannot be
+# re-added by a copy-paste, and `test_gates` asserts they appear in no runtime or identity set.
+REVOKED_GATEWAY_LANES = ['agy:gemini-3-pro-biz',
+                         'agy:gpt-oss-120b-biz',
+                         'agy:gemini-3-flash-biz']
+# The model those relabelled verdicts name. It is a JUDGE IDENTITY, not a runtime lane:
+# 39,236 verdicts carry it, and a name the gate does not know is rejected as `unknown judge`,
+# which silently blocked 13,002 shipped pairs after the rename. It never enters
+# `active_judges()` - the account it lived on is retired.
+RETIRED_JUDGES = ['agy:gemini-3.6-flash']
 # Fallback order is a COST order: free rotators first, metered last. When all three Codex
 # accounts were momentarily parked, a paid-first list admitted `deepseek:deepseek-v4-pro`
 # for an entire run - about 4900k tokens of judging that the free lanes would have done.
@@ -97,7 +111,11 @@ def lane_model(lane_id):
     return name
 
 
-JUDGES = GATEWAY_JUDGES + codex_judges() + LEGACY_JUDGES
+# The revoked lanes are subtracted from the identity set as well as from the runtime pool. That
+# is only sound because no verdict names them; a lane that had recorded one would have to stay
+# an accepted identity, or the gate would reject its own history as `unknown judge`.
+JUDGES = [s for s in GATEWAY_JUDGES + codex_judges() + LEGACY_JUDGES + RETIRED_JUDGES
+          if s not in REVOKED_GATEWAY_LANES]
 
 
 def active_judges():
@@ -108,8 +126,12 @@ def active_judges():
     models at a few seconds per call: a Codex-only panel is one model however many accounts
     answer, and the free rotators take 40-170s per call, which is hours per pass on a corpus
     this size. Codex follows as another model, and the rotators remain the last free resort.
+
+    The `-biz` lanes are gone entirely, not filtered here: they answered as one model under
+    three names, which is the opposite of what a panel is for, and they were metered. The
+    subtraction below is a belt on the braces in case a name is re-added upstream.
     """
-    return GATEWAY_JUDGES + codex_judges() + [
+    return [s for s in GATEWAY_JUDGES if s not in REVOKED_GATEWAY_LANES] + codex_judges() + [
         s for s in LEGACY_JUDGES if not s.startswith('deepseek:')]
 
 SYSTEM_TEMPLATE = """당신은 %(source_name)s→한국어 게임 로컬라이제이션 품질 심사관이다. 번역가가 아니라 검수자다.
@@ -275,7 +297,11 @@ def live_panel(required):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
+    # `--batch` exists HERE and nowhere else. Copying this invocation to
+    # `hanpatch translate` used to prefix-match it onto `--batch-chars`, capping
+    # that run at eight source characters. Abbreviations are off so the mistake
+    # is an error instead of a silent 57,621-call bill.
+    ap = argparse.ArgumentParser(prog='hanpatch qa', allow_abbrev=False)
     ap.add_argument('--families', default='all')
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--workers', type=int, default=3)

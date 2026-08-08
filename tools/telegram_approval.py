@@ -53,6 +53,10 @@ class Tap:
     callback_id: str = ''
     message_id: Optional[int] = None
     chat_id: Optional[int] = None
+    # False when the button belonged to a different pull request. Such a tap
+    # must not be reported as this pull request's verdict - two waiters share
+    # one bot, and getUpdates hands each update to whoever asks first.
+    matches_pr: bool = True
 
 
 def button_data(action: str, number: int, head_sha: str) -> str:
@@ -91,7 +95,8 @@ def read_tap(update: dict, number: int, head_sha: str, owner_id: str) -> Optiona
         return Tap(action, False, 'not the owner (%s)' % sender, **common)
 
     if raw_number != str(number):
-        return Tap(action, False, 'meant for pull request #%s' % raw_number, **common)
+        return Tap(action, False, 'meant for pull request #%s' % raw_number,
+                   matches_pr=False, **common)
 
     if not head_sha.lower().startswith(sha.lower()):
         return Tap(action, False, 'stale: written for %s, head is %s'
@@ -360,6 +365,11 @@ def wait_for_tap(bot: Telegram, number: int, head_sha: str, owner_id: str,
         for update in batch:
             tap = read_tap(update, number, head_sha, owner_id)
             if tap is None:
+                continue
+            if not tap.matches_pr:
+                # Someone else's question. Say so on the button rather than
+                # letting it look like this pull request was refused.
+                bot.answer(tap.callback_id, tap.reason)
                 continue
             return tap
     return None

@@ -338,6 +338,12 @@ case('and the refusal says the button was stale',
      'stale' in read_tap(tap_update(sha=OLD[:12]), 1, HEAD, OWNER).reason)
 case('a tap meant for another pull request does not leak across',
      read_tap(tap_update(number=2), 1, HEAD, OWNER).accepted is False)
+case('and it is marked as belonging to that other pull request',
+     read_tap(tap_update(number=2), 1, HEAD, OWNER).matches_pr is False)
+case('a tap for this pull request is marked as ours',
+     read_tap(tap_update(), 1, HEAD, OWNER).matches_pr is True)
+case('even a refusal for this pull request stays ours',
+     read_tap(tap_update(sender='999'), 1, HEAD, OWNER).matches_pr is True)
 case('the hold button approves nothing',
      read_tap(tap_update(action=HOLD), 1, HEAD, OWNER).accepted is False)
 case('an ordinary chat message is not a tap',
@@ -375,6 +381,10 @@ class FakeBot:
     def __init__(self, batches):
         self.batches = list(batches)
         self.offsets = []
+        self.answered = []
+
+    def answer(self, callback_id, text):
+        self.answered.append((callback_id, text))
 
     def updates(self, offset):
         self.offsets.append(offset)
@@ -389,6 +399,14 @@ _ticks = iter([0, 1, 2, 3, 4])
 case('a tap in the first batch is returned',
      wait_for_tap(_bot, 1, HEAD, OWNER, deadline=3,
                   clock=lambda: next(_ticks)).accepted is True)
+
+_foreign = FakeBot([[dict(tap_update(number=2), update_id=8)], []])
+_ticks3 = iter([0, 1, 2, 3, 4, 5])
+case('a tap for another pull request is not mistaken for this one being refused',
+     wait_for_tap(_foreign, 1, HEAD, OWNER, deadline=3,
+                  clock=lambda: next(_ticks3)) is None)
+case('and the person who tapped is told why nothing happened',
+     _foreign.answered and 'pull request #2' in _foreign.answered[0][1])
 
 _noise = FakeBot([[{'update_id': 4, 'message': {'text': 'hi'}}], []])
 _ticks2 = iter([0, 1, 2, 3, 4, 5])
