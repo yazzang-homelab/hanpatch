@@ -89,12 +89,123 @@ def encrypt_section(key, partition_id, section, plaintext_stream, out, total,
         written += len(b)
 
 
-def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
+
+def _encrypt_exefs(n, data, offset, secondary):
+    if n.no_crypto:
+        return data
+    key = n.secondary if secondary else n.primary
+    return AES.new(key, AES.MODE_CTR, counter=Counter.new(
+        128, initial_value=n.ctr(2, offset // 16))).encrypt(data)
+
+
+def _rebuild_exefs(n, replacements):
+    if not hasattr(replacements, 'items'):
+        raise ValueError('ExeFS replacements must be a name-to-bytes mapping')
+    replacements = dict(replacements)
+    capacity = (n.romfs_off - n.exefs_off) * 0x200
+    section_size = n.exefs_size * 0x200
+    if not n.exefs_off or capacity < 0x200 or section_size > capacity:
+        raise ValueError('source ExeFS section does not fit before RomFS')
+    header = n.exefs(0, 0x200)
+    if len(header) != 0x200:
+        raise ValueError('source ExeFS header is truncated')
+
+    members = []
+    names = set()
+    for index in range(10):
+        entry = header[index * 0x10:(index + 1) * 0x10]
+        name = entry[:8].rstrip(b'\0').decode('latin1')
+        if not name:
+            continue
+        if name in names:
+            raise ValueError(f'source ExeFS has duplicate member {name!r}')
+        names.add(name)
+        offset, size = struct.unpack('<II', entry[8:16])
+        if offset + size > section_size - 0x200:
+            raise ValueError(f'source ExeFS member {name!r} exceeds its section')
+        aligned = align(size, 16)
+        raw = n.exefs(0x200 + offset, aligned,
+                      secondary=name not in ('icon', 'banner', 'logo'))
+        if len(raw) != aligned:
+            raise ValueError(f'source ExeFS member {name!r} is truncated')
+        content = raw[:size]
+        expected = header[0xC0 + (9 - index) * 0x20:0xE0 + (9 - index) * 0x20]
+        if hashlib.sha256(content).digest() != expected:
+            raise ValueError(f'source ExeFS member {name!r} hash mismatch')
+        members.append((index, name, content))
+
+    unknown = set(replacements) - names
+    if unknown:
+        raise ValueError(f'ExeFS replacement names are missing from source: {sorted(unknown)!r}')
+    for name, content in replacements.items():
+        if not isinstance(name, str) or not isinstance(content, bytes):
+            raise ValueError('ExeFS replacements must map member names to bytes')
+
+    new_header = bytearray(header)
+    new_header[:0xA0] = b'\0' * 0xA0
+    new_header[0xC0:0x200] = b'\0' * 0x140
+    plain = bytearray(0x200)
+    rebuilt = []
+    offset = 0
+    for index, name, content in members:
+        content = replacements.get(name, content)
+        offset = align(offset, 0x200)
+        rebuilt.append((index, name, offset, content))
+        if 0x200 + offset + len(content) > capacity:
+            raise ValueError(f'ExeFS replacement {name!r} overflows the section before RomFS')
+        # PADDED to the full 8-byte slot. A bytearray slice assignment RESIZES,
+        # so writing `.code` (5 bytes) into an 8-byte slot silently shortened the
+        # header and shifted every hash and every byte after it left - measured
+        # 10 bytes on this cartridge, which put the member hashes at the wrong
+        # offsets while the superblock hash still agreed because it was computed
+        # over the same broken buffer.
+        name_bytes = name.encode('latin1')
+        if len(name_bytes) > 8:
+            raise ValueError(f'ExeFS member name {name!r} exceeds its 8-byte slot')
+        new_header[index * 0x10:index * 0x10 + 8] = name_bytes.ljust(8, b'\0')
+        struct.pack_into('<II', new_header, index * 0x10 + 8, offset, len(content))
+        new_header[0xC0 + (9 - index) * 0x20:0xE0 + (9 - index) * 0x20] = (
+            hashlib.sha256(content).digest())
+        if len(new_header) != 0x200:
+            raise ValueError('ExeFS header changed size while being rebuilt')
+        end = 0x200 + offset + len(content)
+        if len(plain) < end:
+            plain.extend(b'\0' * (end - len(plain)))
+        plain[0x200 + offset:end] = content
+        offset += len(content)
+
+    declared = align(len(plain), 0x200)
+    if declared > capacity:
+        raise ValueError('rebuilt ExeFS exceeds the space before RomFS')
+    plain.extend(b'\0' * (declared - len(plain)))
+    plain[:0x200] = new_header
+    if len(plain) != declared:
+        raise ValueError('rebuilt ExeFS body does not match its declared size')
+    encrypted = bytearray(_encrypt_exefs(n, bytes(plain[:0x200]), 0, False))
+    encrypted.extend(_encrypt_exefs(n, bytes(plain[0x200:declared]), 0x200, True))
+    for _index, name, offset, content in rebuilt:
+        start = 0x200 + offset
+        encrypted[start:start + len(content)] = _encrypt_exefs(
+            n, content, start, name not in ('icon', 'banner', 'logo'))
+    hash_units = struct.unpack_from('<I', n.h, 0x1A8)[0] or 1
+    span = hash_units * 0x200
+    if span > len(plain):
+        raise ValueError('rebuilt ExeFS is shorter than its declared superblock region')
+    return bytes(encrypted), bytes(plain), declared // 0x200, hashlib.sha256(plain[:span]).digest()
+
+def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None,
+                 exefs_replacements=None, decrypt=False):
     """Write one NCCH partition with `new_romfs` swapped in.
 
-    Returns (size, sha256). Everything between the header and the RomFS is
-    copied verbatim in its still-encrypted form, so the exefs and exheader are
-    untouched and need no key at all.
+    Returns (size, sha256). Without an ExeFS replacement, everything between
+    the header and RomFS is copied verbatim. With replacements, only the
+    declared ExeFS section and its header hash/size fields are rebuilt.
+
+    `decrypt` writes every encrypted section as plaintext and declares
+    NoCrypto in the NCCH flags. That is not a convenience: emulators refuse an
+    encrypted title outright (Azahar 2126.0 answers "Your ROM is Encrypted"
+    and never boots it), so a build meant to be played needs this form. The
+    superblock hashes cover PLAINTEXT in both modes, so they do not change.
     """
     n = ncchmod.NCCH(src_path, base, keystore=keystore)
     header = bytearray(n.h)
@@ -122,17 +233,62 @@ def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
             f'superblock region the NCCH header declares ({hash_region} media '
             f'units); refusing to write a hash over data that does not exist')
     header[0x1E0:0x200] = hashlib.sha256(first).digest()
+    if decrypt:
+        flags = bytearray(header[0x188:0x190])
+        flags[3] = 0                     # crypto method: none
+        flags[7] = (flags[7] & ~(0x01 | 0x20)) | 0x04   # drop fixed-key/seed, set NoCrypto
+        header[0x188:0x190] = bytes(flags)
+    rebuilt_exefs = plain_exefs = None
+    if exefs_replacements is not None or decrypt:
+        rebuilt_exefs, plain_exefs, exefs_units, exefs_hash = _rebuild_exefs(
+            n, exefs_replacements or {})
+        struct.pack_into('<I', header, 0x1A4, exefs_units)
+        header[0x1C0:0x1E0] = exefs_hash
+        if decrypt:
+            rebuilt_exefs = plain_exefs
 
     src = open(src_path, 'rb')
     with open(out_path, 'wb') as o:
         o.write(bytes(header))
-        # header..romfs is copied verbatim, still encrypted, so no key is needed
-        src.seek(base + 0x200)
-        copy_exact(src, o, romfs_off_bytes - 0x200,
-                   f'{src_path} header..romfs region', at=base + 0x200)
+        if rebuilt_exefs is None:
+            src.seek(base + 0x200)
+            copy_exact(src, o, romfs_off_bytes - 0x200,
+                       f'{src_path} header..romfs region', at=base + 0x200)
+        else:
+            exefs_at = n.exefs_off * 0x200
+            at = 0x200
+            if decrypt and n.exh_size:
+                # The exheader is encrypted with the PRIMARY key, so a verbatim
+                # copy would ship ciphertext inside a NoCrypto title.
+                #
+                # Its REGION is 0x800 (0x400 exheader + 0x400 access
+                # descriptor) and is NOT `exh_size * 2`: this cartridge
+                # declares 0x3FB, so trusting the declared size wrote 10 bytes
+                # too few and shifted every following section left by 10 —
+                # a build that still passed the superblock hashes because they
+                # do not cover the ExeFS body.
+                region = 0x800
+                if n.exh_size * 2 > region:
+                    raise ValueError(
+                        f'exheader declares {n.exh_size * 2:#x}, larger than the '
+                        f'{region:#x} region this writer knows how to reproduce')
+                exheader = n.read_section(ncchmod.SEC_EXHEADER, 1, region)
+                o.write(exheader)
+                at += region
+            # logo and plain region are never encrypted: copy them verbatim
+            src.seek(base + at)
+            copy_exact(src, o, exefs_at - at,
+                       f'{src_path} header..ExeFS region', at=base + at)
+            o.write(rebuilt_exefs)
+            gap_at = exefs_at + len(rebuilt_exefs)
+            if gap_at > romfs_off_bytes:
+                raise ValueError('rebuilt ExeFS overlaps the RomFS')
+            src.seek(base + gap_at)
+            copy_exact(src, o, romfs_off_bytes - gap_at,
+                       f'{src_path} ExeFS..RomFS gap', at=base + gap_at)
         with open(new_romfs, 'rb') as rf:
             encrypt_section(n.secondary, n.partition_id, 3, rf, o, romfs_pad,
-                            no_crypto=n.no_crypto)
+                            no_crypto=n.no_crypto or decrypt)
     got = os.path.getsize(out_path)
     if got != new_content_size:
         raise ValueError(f'rebuilt content is {got:#x}, expected '
@@ -147,7 +303,8 @@ def rebuild_ncch(src_path, base, new_romfs, out_path, keystore=None):
     return new_content_size, h.digest()
 
 
-def rebuild(cia_path, new_romfs, out_path, keystore=None):
+def rebuild(cia_path, new_romfs, out_path, keystore=None, exefs_replacements=None,
+            decrypt=False):
     cia = Cia(cia_path)
     main = cia.chunks[0]
     from hanpatch.platforms.threeds import cia as ciamod
@@ -155,8 +312,9 @@ def rebuild(cia_path, new_romfs, out_path, keystore=None):
         cia, main['idx'], workdir=os.path.dirname(os.path.abspath(out_path)),
         keystore=keystore)
     tmp = out_path + '.content0'
-    new_content_size, main_hash = rebuild_ncch(plain, base, new_romfs, tmp,
-                                               keystore=keystore)
+    new_content_size, main_hash = rebuild_ncch(
+        plain, base, new_romfs, tmp, keystore=keystore,
+        exefs_replacements=exefs_replacements, decrypt=decrypt)
     if temp and os.path.exists(plain):
         os.remove(plain)
 

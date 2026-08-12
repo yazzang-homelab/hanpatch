@@ -151,23 +151,32 @@ def build_romfs(stage_dir, out, order_from=None):
     return romfs_build.write_romfs(stage_dir, out, order_from=order_from)
 
 
-def rebuild_cia(original, romfs_bin, out, keystore=None):
+def rebuild_cia(original, romfs_bin, out, keystore=None, exefs_replacements=None,
+                decrypt=False):
     """Swap a new RomFS into a CIA, fixing every hash/signature-adjacent field."""
-    return repack.rebuild(original, romfs_bin, out, keystore=keystore)
+    return repack.rebuild(
+        original, romfs_bin, out, keystore=keystore,
+        exefs_replacements=exefs_replacements, decrypt=decrypt)
 
 
-def rebuild(original, romfs_bin, out, keystore=None):
+def rebuild(original, romfs_bin, out, keystore=None, exefs_replacements=None,
+            decrypt=False):
     """Container-agnostic rebuild: CIA in, CIA out; CCI in, CCI out."""
     kind = detect(original)
     if kind == 'cia':
-        return repack.rebuild(original, romfs_bin, out, keystore=keystore)
+        return repack.rebuild(
+            original, romfs_bin, out, keystore=keystore,
+            exefs_replacements=exefs_replacements, decrypt=decrypt)
     if kind == 'ncch':
-        repack.rebuild_ncch(original, 0, romfs_bin, out, keystore=keystore)
+        repack.rebuild_ncch(
+            original, 0, romfs_bin, out, keystore=keystore,
+            exefs_replacements=exefs_replacements, decrypt=decrypt)
         return out
     p = ncsdmod.Ncsd(original).partition(0)
     tmp = out + '.part0'
-    repack.rebuild_ncch(original, p['offset'], romfs_bin, tmp,
-                        keystore=keystore)
+    repack.rebuild_ncch(
+        original, p['offset'], romfs_bin, tmp, keystore=keystore,
+        exefs_replacements=exefs_replacements, decrypt=decrypt)
     ncsdmod.rebuild(original, {0: tmp}, out)
     os.remove(tmp)
     return out

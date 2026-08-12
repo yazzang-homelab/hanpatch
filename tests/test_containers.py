@@ -23,10 +23,12 @@ from Crypto.Cipher import AES  # noqa: E402
 
 from hanpatch import delta  # noqa: E402
 from hanpatch.platforms.threeds import cia as ciamod  # noqa: E402
+from hanpatch.platforms.threeds import blz  # noqa: E402
 from hanpatch.platforms.threeds import keys as keysmod  # noqa: E402
 from hanpatch.platforms.threeds import ncsd as ncsdmod  # noqa: E402
 from hanpatch.platforms.threeds import romfs as romfsmod  # noqa: E402
 from hanpatch.adapters import dq7 as dq7mod  # noqa: E402
+from hanpatch.formats import dq7table  # noqa: E402
 from PIL import Image  # noqa: E402
 from hanpatch.platforms import threeds as threedsmod  # noqa: E402
 
@@ -1271,6 +1273,56 @@ if _FPT_DIR:
 else:
     print()
     print('  skip real-container cases (pass --fpt-dir DIR with dumped .fpt files)')
+
+print()
+print('== deterministic 3DS BLZ compression ==')
+_blz_plain = (b'DQ7 executable fixture\0' * 1024) + bytes(range(256))
+_blz_first = blz.compress(_blz_plain)
+_blz_second = blz.compress(_blz_plain)
+case('BLZ compression is deterministic', _blz_first == _blz_second)
+case('BLZ compressed data round trips exactly',
+     blz.decompress(_blz_first) == _blz_plain)
+case('BLZ uses compression when it saves space', len(_blz_first) < len(_blz_plain))
+print()
+print('== dq7 string tables: the menu/name text that lives outside /MESS ==')
+_MENU = ('#0,0,\r\n#1,0,ひのきの;ぼう\r\n#2,,こんぼう\r\n\r\n'
+         '#3,0,その他{1ほか}\r\n').encode('utf-8')
+_TEXT = ('\ufeff0,"-"\r\n1,"ひのきのぼう"\r\n2,"メラ"\r\n\r\n').encode('utf-8')
+
+_m = dq7table.parse('MENULIST/x.txt', _MENU)
+_t = dq7table.parse('TEXT/y.txt', _TEXT)
+case('a menu table parses every non-empty row', len(_m.rows) == 4)
+case('a quoted name table parses every non-empty row', len(_t.rows) == 3)
+case('the BOM is a property of the file, not of a row',
+     _t.bom == '\ufeff' and _m.bom == '')
+case('an untouched menu table rebuilds byte-for-byte',
+     dq7table.build(_m) == _MENU)
+case('an untouched name table rebuilds byte-for-byte, BOM included',
+     dq7table.build(_t) == _TEXT)
+# The flag column differs per row (`0` and empty both occur) and the id column is the
+# game's own index: rewriting either shifts what the engine looks up, so a replacement
+# must edit the text field ONLY.
+dq7table.set_text(_m, '#2', '곤봉')
+dq7table.set_text(_t, '1', '노송나무 몽둥이')
+case('replacing a menu row keeps its id and its empty flag column',
+     b'#2,,\xea\xb3\xa4\xeb\xb4\x89' in dq7table.build(_m))
+case('replacing a quoted row keeps the quoting',
+     '1,"노송나무 몽둥이"'.encode('utf-8') in dq7table.build(_t))
+case('a replacement leaves every other row untouched',
+     dq7table.build(_m).count(b'\r\n') == _MENU.count(b'\r\n')
+     and dq7table.build(_t).count(b'\r\n') == _TEXT.count(b'\r\n'))
+case('an unparseable row is refused rather than silently dropped',
+     raises(lambda: dq7table.parse('MENULIST/x.txt', b'not a row\r\n'),
+            'unrecognised table row'))
+case('a family id carries no slash, because a manifest key is split on the first one',
+     dq7table.family_of('MENULIST/command_menu.txt') == '@MENULIST_command_menu'
+     and '/' not in dq7table.family_of('TEXT/ITEM_NAME.txt'))
+# A table row is one stored line. A translation carrying a break would split the record
+# and shift every field after it, which is silent corruption rather than a failed build.
+case('the injector refuses a translation containing a line break',
+     'line break' in (dq7mod.DragonQuest7.inject.__doc__ or '')
+     or 'stores exactly one line' in open(
+         os.path.join(ROOT, 'hanpatch', 'adapters', 'dq7.py'), encoding='utf-8').read())
 
 print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed')
