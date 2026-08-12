@@ -167,6 +167,65 @@ not make the delimiter checker permissive globally. The default is an empty list
 same declared exception is checked on target output. A single observed extra brace in one
 DQ7 record was enough to block the last row until this fact was recorded.
 
+## A player-entered proper name is settled by evidence, in this order
+
+Do not choose a player-entered name from taste or from a string search. A mistaken
+hardcode turns a player choice into a different character name throughout the patch.
+Record the title, retail version, platform, save state, and captures or notes for the
+evidence below; stop at the first step that answers.
+
+**1. Observe the actual new-game input path at runtime.** Start a fresh retail game and
+reach the name-entry UI. Record whether the field is prefilled, whether it accepts an
+empty value, what action advances it, and the available input method. Only a prefill or
+default value *proven in that actual retail path* may be hardcoded as a default. The
+field's contents before the player edits it, not a ROM string, establish that fact.
+
+DQ7 is the counterexample: its retail name field is empty, the game cannot proceed with
+an empty field, and its input method is Japanese-only. Standalone `アルス` literals still
+exist in its data. They therefore do **not** prove that `アルス` is a canonical or default
+player-entered name. This settles the source fact ("no retail default"), but it does not
+settle the localisation defect ("the target-script player cannot enter a name").
+
+**2. Classify ROM literals by their rendering context.** Search extracted text and trace
+each candidate through the renderer. Label it as a demo, sample, save preview, system
+example, or another fixed-context literal, versus a runtime player-name substitution
+such as `{HERO}` or `{PLAYER}`. A literal in a fixed context says only what that context
+renders; it is not evidence of the new-game default. A runtime substitution establishes
+that the name is player-controlled, not what its default is. Keep the counts and context
+examples so later changes can update every affected fixed rendering without confusing it
+with the player choice.
+
+When the source has no default and the shipped input method cannot produce the target
+script, treat usability as a separate product decision. First localise the input method
+without removing player choice if that is technically safe. If it is not, search official
+publisher/settings material for a canonical character name and use it as an explicit
+target-build prefill or hardcoded fallback. Record that intervention as a localisation
+fallback, never as the source game's default. If no official name is established, ask the
+user before choosing one.
+
+**3. Search official publisher or settings sources when the runtime default is
+inconclusive, or when an unusable source-language input method requires a target-build
+fallback.** Prefer publisher documentation, official settings material, or the official
+site; exclude fan spellings and self-invented transliterations. Record the source beside
+the profile term and distinguish an officially named character or localisation fallback
+from a proven retail input default.
+
+**4. Ask the user if both runtime and official evidence are inconclusive.** State which
+checks were inconclusive. Do not invent a name, infer one from the most common literal,
+or quietly select a fan spelling.
+
+Whatever the answer, apply it to the **profile source** (`profiles/<title>.json:terms`)
+and then to every existing fixed rendering that the context classification requires.
+`work/ko/glossary.json` is derived; a fix that lives only there is lost on the next
+rebuild. After changing a name, re-run the divergence scan that compares one source
+string across families — a name promoted into the glossary can still disagree with a
+row translated before the promotion.
+
+Transliteration, when it is your call: follow the receiving language's official
+transcription rules rather than what reads nicely, and write down which rule you
+followed. `アルス` is `아루스` under the Korean standard (`ル` → `루`); `아르스` is the
+common habit. Either is defensible; only one may ship.
+
 ## The QA repair cycle
 
 A judge verdict is about one exact pair: the source and *the value that ships*. Everything
