@@ -58,6 +58,11 @@ def budget_for(kind):
 # tag is a zero-width control tag: it must not keep a space alive at the start
 # of a line, while `<num1> 이상` must.
 SUBST_TAGS = set(config.prof('movable_tags'))
+# Render widths are title evidence. Fixed substitutions such as a character name
+# declare their measured glyph advance here. A title may also declare one
+# conservative width for its variable name field; absent data fails closed.
+SUBST_WIDTHS = dict(config.prof('substitution_widths') or ())
+SUBST_WIDTH_DEFAULT = config.prof('substitution_width_default')
 # Which tags actually break a line is a per-title fact, not an assumption:
 # `hard_break` lists tags the engine treats as a break, and it may be empty. In
 # Crimson Shroud only `\n` breaks a line and `<br>` is a message-advance marker,
@@ -103,7 +108,7 @@ def have_font():
 def reset():
     """Re-read profile-derived layout constants (after config.set_root)."""
     global _font, TAG, HARD_BREAK, PAGE, CAPACITY, BUDGET
-    global SUBST_TAGS
+    global SUBST_TAGS, SUBST_WIDTHS, SUBST_WIDTH_DEFAULT
     _font = None
     invalidate_capacity()
     TAG = config.tag_re()
@@ -112,6 +117,8 @@ def reset():
     CAPACITY = config.prof('capacity')
     BUDGET = dict(config.prof('budget'))
     SUBST_TAGS = set(config.prof('movable_tags'))
+    SUBST_WIDTHS = dict(config.prof('substitution_widths') or ())
+    SUBST_WIDTH_DEFAULT = config.prof('substitution_width_default')
 
 
 def char_width(ch):
@@ -122,8 +129,33 @@ def char_width(ch):
     return f.width_of(i)[2]
 
 
+def substitution_width(tag):
+    """Return a substitution's title-declared rendered width.
+
+    Fixed tags use their individual measurement. A variable tag may use the
+    title's explicit conservative name-field width. Missing data is an error:
+    zero width or an invented fallback hides a real overflow.
+    """
+    width = SUBST_WIDTHS.get(tag, SUBST_WIDTH_DEFAULT)
+    if width is None:
+        raise ValueError(
+            f'no declared render width for substitution tag {tag}; declare '
+            f'substitution_widths[{tag!r}] or substitution_width_default')
+    if not isinstance(width, int) or isinstance(width, bool) or width < 0:
+        raise ValueError(
+            f'substitution width for {tag} must be a non-negative integer, got {width!r}')
+    return width
+
+
 def text_width(s):
-    return sum(char_width(c) for c in TAG.sub('', s) if c != '\n')
+    width = 0
+    for kind, value in tokenize(s):
+        if kind == 'g':
+            if value in SUBST_TAGS:
+                width += substitution_width(value)
+        else:
+            width += sum(char_width(c) for c in value if c != '\n')
+    return width
 
 
 def tokenize(s):
@@ -168,14 +200,20 @@ def rewrap(s, budget, soft=False):
 
     for kind, val in tokenize(s):
         if kind == 'g':
-            out.append(val)
-            if val in HARD_BREAK or val in PAGE:
-                cur = 0
-                started = False
-            elif val in SUBST_TAGS:
-                # renders glyphs, so the space after `<num1>` is real text and
-                # not leading indentation
+            if val in SUBST_TAGS:
+                w = substitution_width(val)
+                if cur > 0 and cur + w > budget:
+                    newline()
+                out.append(val)
+                cur += w
+                # A runtime substitution renders glyphs, so the space after it is
+                # real text rather than leading indentation.
                 started = True
+            else:
+                out.append(val)
+                if val in HARD_BREAK or val in PAGE:
+                    cur = 0
+                    started = False
             continue
         # plain text: split keeping separators
         for piece in re.split(r'(\n| )', val):
@@ -379,8 +417,60 @@ def transplant_breaks(en, ko):
     return ''.join(out)
 
 
+def composed(kind):
+    """Whether this container stores FRAGMENTS the engine joins before drawing.
+
+    A fragment is not a display line, so measuring one against a box width answers a
+    question nobody asked. DQ7's StreetPass lithograph-name tables are the case that forced
+    this: the rows are pieces like `となりの`, `なマクドナルド`, `荒海を`, `空と海と` -
+    several end in a grammatical particle - and the engine concatenates two of them into one
+    name that is drawn in a wider field. Deriving a budget from the widest FRAGMENT then
+    yields 55px, under which no four-syllable Korean word fits at all (four Hangul syllables
+    measure 56px against four kanji at 55px in this font), so the check rejected correct
+    translations and asked for text that would be wrong.
+
+    This is a per-title container fact and must be declared, never inferred: a table of
+    short standalone labels looks identical from here, and exempting one of those would let
+    real overflow through. Declared families skip WIDTH enforcement only; tags, glossary,
+    register, kana and the soft-break marker are still checked.
+    """
+    return kind in set(config.prof('composed_families') or ())
+
+
+def width_advisory(kind):
+    """Whether a width overrun in this container is reported but not blocking.
+
+    The budget this module enforces is derived from the widest line the SOURCE renders, which
+    is a lower bound on the box: it proves the box is at least that wide and says nothing
+    about slack. For the dialogue box that is enough, because 343 message families share one
+    UI element and the widest of them pins it at 321px. For a per-slot string table it is
+    not: each slot is sized independently, so its own longest Japanese string is all the
+    evidence there is, and Hangul runs about 9% wider per character than kana in this font
+    (14.0px against 12.8px). Enforcing the bound there does not shorten prose, it truncates
+    proper nouns - measured on DQ7, `ベアトリス` had to become `베아트` and `プロビナ神父`
+    had to lose the place name entirely to satisfy a 67px and 77px slot.
+
+    The empirical half of the argument matters more than the arithmetic: the previously
+    shipped DQ7 build enforced NO width at all (its profile carried an empty capacity), a
+    player completed the early game on it, and the defect reported was dialogue running past
+    the box - not clipped menu entries or names. So the table slots demonstrably tolerated
+    these widths, while the dialogue box demonstrably did not.
+
+    Declared per title, never inferred, and it downgrades WIDTH only: tags, glossary,
+    register, kana, the soft-break marker and the line/page structure are still enforced,
+    and a violation is still printed so nobody can claim it was measured clean.
+    """
+    if not config.prof('width_advisory_tables'):
+        return False
+    return kind.startswith('@')
+
+
 def fits(en, ko, kind, group=None):
     """Return (rewrapped_ko, problems)."""
+    if composed(kind):
+        return ko.replace('\n', ' '), []
+    if width_advisory(kind):
+        return ko.replace('\n', ' '), []
     budget = budget_for(kind)
     if engine_lays_out(en):
         return ko.replace('\n', ' '), []

@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 
 
 from hanpatch import glossary
+from hanpatch import manifest as manmod
 from hanpatch import tm
 from hanpatch import capacity as capmod  # noqa: E402
 from hanpatch import translate
@@ -23,9 +24,34 @@ POLITE = re.compile(r'(니다|세요|십시오|습니까|나요)[.!?"\'”’)\]
 PLAIN = re.compile(r'(다|였다|한다|된다|이다)[.!?"\'”’)\]]*$')
 
 
+# A sentence ends at final punctuation, not at a line break. Newlines are joined with a
+# space so a word split across a wrap does not fuse into a different word.
+_SENT_END = re.compile(r'(?<=[.!?…。？！])\s+')
+
+
+def sentences(text):
+    flat = ' '.join(l.strip() for l in text.split('\n'))
+    return [p for p in _SENT_END.split(flat) if p.strip()]
+
+
 def main():
     global LAST_EXAMINED
     src = config.load_object(config.src_path(), 'the extracted source')
+    # Audit what SHIPS. `inject` is handed the sealed manifest, so that is the artifact a
+    # release claim is about. Reading the merged TM instead was measured wrong on DQ7
+    # 2026-08-11: `tm.lookup` matches with the soft-break marker stripped, so for
+    # `はがねの;つるぎ` it returned the `;`-less '강철검' while the manifest - and the ROM -
+    # carried '강철;검'. That produced 76 soft-break failures plus 58 register/normalisation
+    # failures against text no player would ever see, and blocked a build whose actual
+    # output was clean. The manifest also holds the normalisation `translate.check` applies
+    # on its return path, which the raw TM predates.
+    man_entries = {}
+    try:
+        man_entries = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
+    except SystemExit:
+        # No seal yet: fall back to the TM so `audit` still works before the first
+        # `manifest build`, and say so rather than silently checking something else.
+        print('  note: no sealed manifest; auditing the translation memory instead')
     tmdb = tm.load()
     gl = glossary.load()
     fails = defaultdict(list)
@@ -34,11 +60,15 @@ def main():
 
     for family, items in src.items():
         for it in items:
+            # The same source resolution the gate and the injector use. `it['en']` alone is
+            # empty on placeholder rows, where the Japanese column is the real source.
             en = it['en']
             if tm.is_skip(en, it['key']) or not en.strip():
                 continue
             stats['total'] += 1
-            ko = tm.lookup(tmdb, en)
+            ko = man_entries.get(f'{family}/{it["key"]}')
+            if ko is None:
+                ko = tm.lookup(tmdb, en)
             if ko is None:
                 stats['untranslated'] += 1
                 fails['untranslated'].append(f'{family}:{it["key"]}')
@@ -50,7 +80,13 @@ def main():
             for p in probs:
                 fails[p.split(':')[0]].append(f'{family}:{it["key"]} :: {p}')
             # register mixing inside one string
-            lines = [l.strip() for l in TAG.sub('', ko).split('\n') if l.strip()]
+            # Register belongs to a SENTENCE, not to a line. A dialogue box wraps mid
+            # sentence, so classifying each line makes any wrap look like a sentence ending.
+            # Measured on DQ7 2026-08-11: all 8 remaining "mixed register" reports were this
+            # - '숨기셔도 저에게는 다' scored plain because the line ends in the ADVERB 다, and
+            # '이전보다' because it ends in the particle 보다, while both strings were wholly
+            # polite. Splitting on sentence-final punctuation instead reports 0.
+            lines = [l.strip() for l in sentences(TAG.sub('', ko)) if l.strip()]
             pol = sum(1 for l in lines if POLITE.search(l))
             pla = sum(1 for l in lines if PLAIN.search(l) and not POLITE.search(l))
             if pol and pla:
@@ -86,7 +122,13 @@ def main():
             pending.update(config.load_object(p, 'the pending review shard'))
         except (OSError, SystemExit):
             continue
-    pending = {k: v for k, v in pending.items() if tm.lookup(tmdb, k) is None}
+    # A row the profile says NOT to translate is not pending review. Without this the queue
+    # can never be emptied and the release bar is held shut by a rule stating the work should
+    # not be done: measured on DQ7 2026-08-11, 9 markup-only sources (`<BLANK>`, `<JA_HP>`,
+    # `<JA_EQUIP>`, ...) were recorded before `skip_tag_only` existed, have no translation by
+    # design, and so survived the has-a-translation filter forever.
+    pending = {k: v for k, v in pending.items()
+               if tm.lookup(tmdb, k) is None and not tm.is_skip(k)}
     print(f'=== review queue ===\n  unresolved: {len(pending)}')
     for k in list(pending)[:5]:
         print(f'      {k[:90]!r}')

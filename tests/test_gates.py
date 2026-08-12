@@ -36,6 +36,8 @@ from hanpatch import josa  # noqa: E402
 from hanpatch import manifest as manmod  # noqa: E402
 from hanpatch import qa as qamod  # noqa: E402
 from hanpatch import qagate  # noqa: E402
+from hanpatch import qarelabel  # noqa: E402
+from hanpatch import qapurge  # noqa: E402
 from hanpatch import tm  # noqa: E402
 from hanpatch import wrap as _wrap  # noqa: E402
 from hanpatch import audit as _ad_audit  # noqa: E402
@@ -253,6 +255,12 @@ else:
 case('an edited manifest value invalidates its verdict',
      qamod.pair_key('The danger is past.', '위험은 지나갔다.') !=
      qamod.pair_key('The danger is past.', '위험은 지나갔다!'))
+case('a layout-only rewrap keeps the same wording identity',
+     qamod.wording_key('ja', '소중히\n여기는 마음') ==
+     qamod.wording_key('ja', '소중히 여기는\n마음'))
+case('wording identity still rejects a non-whitespace edit',
+     qamod.wording_key('ja', '기적이라는 걸') !=
+     qamod.wording_key('ja', '기이라는 걸'))
 case('a defect disposition blocks release',
      qagate.verdict_problem({'a': 4, 'f': 5, 'd': 'defect', 'judge': 'j',
                              'en': 'en', 'ko': 'ko', 'r': 'fishbone 오역'},
@@ -318,6 +326,77 @@ case('a producer may not judge its own output',
                              'judge': _qamod.JUDGES[0], 'en': 'en',
                              'ko': 'ko'}, 'en', 'ko', _qamod.JUDGES[0])
      is not None)
+# The panel must separate "this verdict is not evidence" from "this verdict found a
+# defect". Conflating them deadlocked 25152 DQ7 pairs: the judging pass refuses to count
+# a verdict from the producing model toward coverage, so it reported nothing left to
+# judge, while the gate treated that same record as a permanent block that no repair
+# could clear (verdicts are kept forever by design).
+_P1 = 'agy:gemini-3-pro'
+_P2 = 'agy:claude-sonnet-4.6'
+_PROD = 'codex1:gpt-5.6-luna'
+_SELF = 'codex2:gpt-5.6-luna'          # a sibling ACCOUNT of the producing model
+
+
+def _v(judge, d='pass', a=5, f=5):
+    return {'a': a, 'f': f, 'd': d, 'judge': judge, 'en': 'en', 'ko': 'ko', 'r': ''}
+
+
+case('a self-serving pass does not veto an otherwise independent panel',
+     qagate.panel_problem([_v(_SELF), _v(_P1), _v(_P2)], 'en', 'ko', _PROD) is None)
+case('a self-serving pass is not counted toward the panel',
+     qagate.panel_problem([_v(_SELF), _v(_P1)], 'en', 'ko', _PROD) is not None)
+case('a pair judged only by its own model never passes',
+     qagate.panel_problem([_v(_SELF), _v(_PROD)], 'en', 'ko', _PROD) is not None)
+case('a defect from the producing model still blocks - it is against interest',
+     qagate.panel_problem([_v(_SELF, d='defect', a=2), _v(_P1), _v(_P2)],
+                          'en', 'ko', _PROD) is not None)
+case('a corrupt score blocks even when the judge is disqualified',
+     qagate.panel_problem([_v(_SELF, a=70), _v(_P1), _v(_P2)],
+                          'en', 'ko', _PROD) is not None)
+# The agy-c gateway answered every request as Gemini 3.6 Flash under three lane names.
+# `qarelabel` renames those verdicts to the model that actually answered, so that name has
+# to be a known judge identity - otherwise 39236 relabelled verdicts read as forgeries and
+# blocked 13002 shipped pairs - while the lanes themselves must never be callable again.
+case('the relabelled true identity is a known judge',
+     qarelabel.TRUE_IDENTITY in qamod.JUDGES)
+case('the retired identity is never dialled by a panel run',
+     qarelabel.TRUE_IDENTITY not in qamod.active_judges())
+case('a revoked gateway lane is never dialled by a panel run',
+     not [j for j in qamod.active_judges() if j in qamod.REVOKED_GATEWAY_LANES])
+# The lanes are now DELETED, not merely un-dialled: they are absent from the identity set too.
+# That is sound only because no verdict names them - `qarelabel` had already rewritten all
+# 39236 - so nothing in the ledger can be rejected as `unknown judge` by their removal.
+case('a revoked lane is not a recorded identity either, since no verdict names one',
+     not [j for j in qamod.JUDGES if j in qamod.REVOKED_GATEWAY_LANES])
+case('a revoked lane name still collapses to its sibling model if it ever reappears',
+     qamod.lane_model('agy:gemini-3-pro-biz') == qamod.lane_model('agy:gemini-3-pro'))
+# Bit-rot in the ledger is not a vote and must not be treated as one: a score of 70 on
+# this corpus blocked its pair permanently, because no number of clean judges can outvote
+# a record the gate reads as corruption. `qapurge` removes exactly those and nothing else
+# - a purge that could drop a defect verdict would be a way to launder a bad translation.
+_GOOD = _qamod.JUDGES[0]
+_PK = qamod.pair_key('en', 'ko')
+
+
+def _rec(judge=_GOOD, d='pass', a=5, f=5, en='en', ko='ko'):
+    return {'a': a, 'f': f, 'd': d, 'judge': judge, 'en': en, 'ko': ko, 'r': ''}
+
+
+case('a score outside 1..5 is damage, not a verdict',
+     qapurge.record_damage(_PK, _rec(a=70)) is not None)
+case('a record that does not hash to its own key is damage',
+     qapurge.record_damage(_PK, _rec(en='other')) is not None)
+case('a defect verdict is never purged',
+     qapurge.record_damage(_PK, _rec(d='defect', a=2)) is None)
+case('a clean verdict is never purged',
+     qapurge.record_damage(_PK, _rec()) is None)
+case('purging keeps the surviving verdicts of a partly damaged pair',
+     qapurge.purge({_PK: [_rec(a=70), _rec(d='defect', a=2)]})
+     == {_PK: [_rec(d='defect', a=2)]})
+case('a pair with nothing but damage is dropped, not left empty',
+     qapurge.purge({_PK: [_rec(a=70)]}) == {})
+case('purging is idempotent',
+     not qapurge.plan(qapurge.purge({_PK: [_rec(a=70), _rec()]}))[0])
 _pipe = open(os.path.join(ROOT, 'hanpatch/pipeline.py')).read()
 case('the packer requires the approved manifest digest',
      'approve(' in _pipe and 'SKIP_GATE' not in _pipe)
@@ -1941,13 +2020,235 @@ case('shipped values come from the manifest, not the raw memory',
                             {'f/k1': 'sealed'}) == {'src1': 'sealed'})
 case('a source with no manifest entry is not shippable and carries no verdict',
      _runmod.shipped_values({'f': [{'en': 'src1', 'key': 'k1'}]}, {}) == {})
+# The repair loop asks for an attempt cap. When `run` did not offer one the whole loop
+# died on TypeError at startup, was restarted by its supervisor every five minutes, and
+# the corpus sat unrepaired for two days while every log line said `repair=up`.
+_LEDGER = {'k1': [{'en': 'src1', 'ko': 'try1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'},
+                  {'en': 'src1', 'ko': 'try1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j2'}],
+           'k2': [{'en': 'src1', 'ko': 'try2', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'}],
+           'k3': [{'en': 'src1', 'ko': 'ko1', 'd': 'defect', 'a': 2, 'f': 2,
+                   'judge': 'j'}]}
+case('an attempt is a distinct judged value, not a verdict',
+     _runmod.judged_values(_LEDGER) == {'src1': {'try1', 'try2', 'ko1'}})
+case('a source that has spent its attempts is not queued again',
+     'src1' not in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                      ledger=_LEDGER, max_attempts=3))
+case('a source with attempts left is still queued',
+     'src1' in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                  ledger=_LEDGER, max_attempts=4))
+case('no cap means no source is withheld from repair',
+     'src1' in _runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4, ledger=_LEDGER))
+case('a stalled source is reported with the attempts it burned',
+     _runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 3)['src1']['attempts'] == 3)
+case('a source still inside the cap is not called stalled',
+     _runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 4) == {})
+case('the repair queue and the stalled list never overlap',
+     not (set(_runmod.qa_reasons(_qf, {'src1': 'ko1'}, 4,
+                                 ledger=_LEDGER, max_attempts=3))
+          & set(_runmod.qa_stalled(_qf, {'src1': 'ko1'}, 4, _LEDGER, 3))))
+print('== a closed account is refused at the call, not at the evidence ==')
+
+
+def _judges_with(spec):
+    prev = _qamod._POOL_OVERRIDE
+    try:
+        _qamod._POOL_OVERRIDE = spec
+        return _qamod.active_judges()
+    finally:
+        _qamod._POOL_OVERRIDE = prev
+
+
+# The two lists must stay separate. This box holds 49,807 verdicts from the retired lane, so
+# dropping it from JUDGES to stop the spending would have the gate reject every one of them
+# as an unknown judge - discarding coverage that was already paid for in order to avoid
+# paying again.
+case('a retired lane keeps its judge identity so its recorded verdicts stay valid',
+     all(l in _qamod.JUDGES for l in _qamod.RETIRED_LANES))
+case('a retired lane is no longer counted as a metered lane to reach for',
+     not (set(_qamod.RETIRED_LANES) & set(_qamod.METERED_LANES)))
+case('naming a retired lane is refused loudly rather than silently dropped',
+     _prov_refuses(lambda: _judges_with(
+         'codex1:gpt-5.6-luna,' + _qamod.RETIRED_LANES[0]), 'retired judge lane'))
+case('the default cheap panel does not contain a retired lane',
+     not (set(_qamod.RETIRED_LANES) & set(_qamod.CHEAP_QA_JUDGES)))
+_provmod = __import__('hanpatch.providers', fromlist=['x'])
+case('the retired provider has no endpoint left in the registry',
+     not (set(_provmod.RETIRED_PROVIDERS) & set(_provmod.ENDPOINTS)))
+case('a stale pool string naming the retired provider fails at build, not at billing',
+     _prov_refuses(lambda: _provmod.build_pool(['deepseek:deepseek-v4-pro']),
+                   'retired provider'))
+
+print('== a below-floor score blocks unless a different scale contradicts it ==')
+_qg = __import__('hanpatch.qagate', fromlist=['x'])
+
+
+def _v(judge, d='pass', a=5, f=5, r=''):
+    return {'judge': judge, 'd': d, 'a': a, 'f': f, 'r': r, 'en': 'EN', 'ko': 'KO'}
+
+# The strict default assumes the judges share a scale. Measured on DQ7, the share of
+# verdicts below the floor over the SAME corpus ran 0.14% to 14.62% across lanes, and three
+# accounts of ONE model supplied most of the low scores. So the knob exists; it is off
+# unless a profile declares it, and it never touches a mechanical check.
+_fc_prev = (_qg.floor_corroboration, _qg.independence, _qg.judge_identity, _qg.JUDGES,
+            _qg.defect_corroboration)
+try:
+    _qg.JUDGES = {'la:m1', 'lb:m2', 'lc:m3'}
+    _qg.independence = lambda: 'lane'
+    _qg.judge_identity = lambda j: j
+    _qg.defect_corroboration = lambda: 1
+    _qg.floor_corroboration = lambda: 1
+    case('by default one below-floor score blocks',
+         'below floor' in (_qg.panel_problem([_v('la:m1'), _v('lb:m2', a=2)],
+                                             'EN', 'KO', '') or ''))
+    _qg.floor_corroboration = lambda: 2
+    case('a lone low score contradicted by an independent judge no longer blocks',
+         _qg.panel_problem([_v('la:m1'), _v('lb:m2', a=2)], 'EN', 'KO', '') is None)
+    case('two judges below the floor still blocks',
+         'corroborated' in (_qg.panel_problem(
+             [_v('la:m1', a=2), _v('lb:m2', f=3)], 'EN', 'KO', '') or ''))
+    # Nobody passed it, so the low score is the only reading anyone has. Ignoring it would
+    # not be corroboration, it would be discarding the sole verdict.
+    case('an UNCONTRADICTED low score still blocks on one vote',
+         'uncontradicted' in (_qg.panel_problem([_v('la:m1', a=2)], 'EN', 'KO', '') or ''))
+    # A pass from the producing model is self-serving, so it cannot be the contradiction
+    # that clears a low score - otherwise a model could rescue its own row by praising it.
+    case("the producing model's own pass does not contradict a low score",
+         'below floor' in (_qg.panel_problem(
+             [_v('la:m1', a=2), _v('lb:m2')], 'EN', 'KO', 'lb:m2') or ''))
+    # Mechanical problems are decided before any of this and are not votes.
+    case('a mechanical problem still blocks regardless of the floor policy',
+         _qg.panel_problem([_v('la:m1'), _v('lb:m2')], 'EN', '', '') is not None)
+finally:
+    (_qg.floor_corroboration, _qg.independence, _qg.judge_identity, _qg.JUDGES,
+     _qg.defect_corroboration) = _fc_prev
+_fc_cfg = config.prof
+try:
+    config.prof = lambda k, *a: 0 if k == 'floor_corroboration' else _fc_cfg(k, *a)
+    case('a floor threshold of zero is refused',
+         _prov_refuses(_qg.floor_corroboration, 'at least 1'))
+    config.prof = lambda k, *a: 'two' if k == 'floor_corroboration' else _fc_cfg(k, *a)
+    case('a non-integer floor threshold is refused',
+         _prov_refuses(_qg.floor_corroboration, 'must be an integer'))
+    config.prof = lambda k, *a: None if k == 'floor_corroboration' else _fc_cfg(k, *a)
+    case('an absent floor declaration keeps the strict default of one',
+         _qg.floor_corroboration() == 1)
+finally:
+    config.prof = _fc_cfg
+_qg_src = open(os.path.join(ROOT, 'hanpatch/qagate.py')).read()
+case('the floor policy is printed by the gate and recorded in the approval token',
+     "'floor_corroboration': floor_corroboration()" in _qg_src
+     and 'floor corroboration' in _qg_src)
+
+print('== accounts reserved for translation are never spent on judging ==')
+# The operator keeps Claude for translation. A list of lanes would be wrong here: the same
+# accounts reach Claude directly, through the `agy` gateway, and through the `a6` relay, so
+# the rule has to be about the account, not about the spelling of one path.
+for _lane in ('claudelee:sonnet', 'claudedrtechmes:opus', 'agy:claude-sonnet-4.6',
+              'a6:claude-sonnet-5'):
+    case(f'{_lane} is recognised as reserved', _qamod.reserved(_lane))
+for _lane in ('codex1:gpt-5.6-luna', 'a6:deepseek-v4-flash',
+              'nimproxy:google/gemma-4-31b-it'):
+    case(f'{_lane} is not reserved', not _qamod.reserved(_lane))
+case('the default cheap panel contains no reserved lane',
+     not [j for j in _qamod.CHEAP_QA_JUDGES if _qamod.reserved(j)])
+case('naming a reserved lane is refused rather than silently dropped',
+     _prov_refuses(lambda: _judges_with('codex1:gpt-5.6-luna,claudelee:sonnet'),
+                   'reserved lane'))
+# Widening is the path that spends without a decision, and it is reached exactly when the
+# panel is short - the moment a rescue looks justified. Every "do not call" rule must hold
+# there too, so assert the source of that loop skips all four categories.
+_qa_src = open(os.path.join(ROOT, 'hanpatch/qa.py')).read()
+_widen = _qa_src.split('for spec in LEGACY_JUDGES:', 1)[-1].split('return pool', 1)[0]
+case('automatic widening skips metered, parked, retired and reserved lanes',
+     all(t in _widen for t in ('METERED_LANES', 'PARKED_RUNTIME_LANES',
+                               'RETIRED_LANES', 'reserved(spec)')))
+# Reserved is about the next call, not the evidence: those verdicts were already paid for.
+case('a reserved lane keeps its judge identity so recorded verdicts stay valid',
+     'claudelee:sonnet' in _qamod.JUDGES)
+
+print('== the repair selector blocks on the same evidence as the gate ==')
+# If the selector is looser than the gate, every extra row it queues is a rewrite of text
+# that was already releasable - and the rewrite gets a fresh, differently-opinionated
+# verdict. That is the loop this policy exists to stop, so the two must agree.
+_cf = {'p1': [{'en': 's1', 'ko': 'k1', 'd': 'defect', 'a': 5, 'f': 5, 'r': '취향',
+               'judge': 'la:m1'}],
+       'p2': [{'en': 's2', 'ko': 'k2', 'd': 'defect', 'a': 5, 'f': 5, 'r': '오역',
+               'judge': 'la:m1'},
+              {'en': 's2', 'ko': 'k2', 'd': 'defect', 'a': 5, 'f': 5, 'r': '오역',
+               'judge': 'lb:m2'}],
+       'p3': [{'en': 's3', 'ko': 'k3', 'd': 'pass', 'a': 2, 'f': 5, 'r': '점수',
+               'judge': 'la:m1'}]}
+_cs = {'s1': 'k1', 's2': 'k2', 's3': 'k3'}
+case('with corroboration of one, a lone complaint is work',
+     's1' in _runmod.qa_reasons(_cf, _cs, 4, corroboration=1))
+case('with corroboration of two, a lone complaint is not work',
+     's1' not in _runmod.qa_reasons(_cf, _cs, 4, corroboration=2))
+case('two judges agreeing is work even under corroboration',
+     's2' in _runmod.qa_reasons(_cf, _cs, 4, corroboration=2))
+case('a score below the floor is work on one vote, being a measurement',
+     's3' in _runmod.qa_reasons(_cf, _cs, 4, corroboration=2))
+# A complaint about a value no longer shipped is already answered, whatever the threshold.
+case('a stale complaint is never work',
+     _runmod.qa_reasons(_cf, {'s1': 'R', 's2': 'R', 's3': 'R'}, 4, corroboration=1) == {})
+# The producing model calling its own row bad is an admission, so it needs no second vote.
+case("the producer's own defect is work on one vote",
+     's1' in _runmod.qa_reasons(_cf, _cs, 4, corroboration=2,
+                                producers={'s1': 'la:m1'}))
+case('the selector default stays strict when no policy is passed',
+     's1' in _runmod.qa_reasons(_cf, _cs, 4))
+
+# The repair loop runs one `hanpatch translate` per family and hands it the actionable map
+# it already computed. Without the option every one of those 332 processes re-read - and
+# re-verified - an 80MB verdict file for an identical answer, 120s of the 135s a family
+# took; with the option missing from the parser, argparse rejected the whole command and
+# the loop repaired nothing at all.
+_cli_src = open(os.path.join(ROOT, 'hanpatch/cli.py')).read()
+case('the translate CLI accepts a precomputed QA list',
+     "'--qa-list'" in _cli_src and 'qa_list' in _cli_src)
+
+
+def _translate_argv(**kw):
+    import argparse as _ap
+    from hanpatch import cli as _cli
+    seen = {}
+    real = _runmod.main
+    try:
+        _runmod.main = lambda argv: seen.setdefault('argv', argv) and 0
+        _cli.cmd_translate(_ap.Namespace(family='f', models='', limit=0, workers=0,
+                                         batch=0, refail=False, qafail=True, **kw))
+    finally:
+        _runmod.main = real
+    return seen.get('argv', [])
+
+
+case('the precomputed list reaches the translate runner',
+     '--qa-list' in _translate_argv(qa_list='/tmp/actionable.json'))
+case('no list means the runner is not handed an empty path',
+     '--qa-list' not in _translate_argv(qa_list=''))
+# `--batch` is not an option of the runner: argparse abbreviation resolves it to
+# `--batch-chars`, so `--batch 8` silently capped a batch at eight CHARACTERS of source
+# and turned a 22-row family into 34 calls.
+case('the runner has no --batch to be mistaken for --batch-chars',
+     '--batch-chars' in open(os.path.join(ROOT, 'hanpatch/run.py')).read()
+     and "'--batch'," not in open(os.path.join(ROOT, 'hanpatch/run.py')).read())
 
 print('== the judge panel is scaled by identity, not by spend ==')
 case('every Codex account on the machine is a judge identity',
      _qamod.codex_judges()
      == [f'codex{a}:{_qamod.CODEX_MODEL}' for a in _prov.codex_accounts()])
-case('the runtime panel leads with the flat-rate gateway models',
-     _qamod.active_judges()[:len(_qamod.GATEWAY_JUDGES)] == _qamod.GATEWAY_JUDGES)
+case('the runtime panel is the explicit cheap QA tier',
+     _qamod.active_judges() == _qamod.CHEAP_QA_JUDGES)
+case('the cheap QA tier offers three independent models',
+     len({_qamod.lane_model(s) for s in _qamod.active_judges()})
+     >= qagate.REQUIRED_JUDGES + 1)
+case('the cheap QA tier contains no subscription or paid endpoint',
+     not any(s.startswith(('agy:', 'claude', 'codex', 'deepseek:'))
+             for s in _qamod.active_judges()))
+case('the isolated A6 translation lane is not a QA judge',
+     not any(s.startswith('a6') for s in _qamod.active_judges()))
 case('a metered lane is never in the preferred runtime panel',
      not any(s.startswith('deepseek:') for s in _qamod.active_judges()))
 case('the preferred panel offers at least three independent models',
@@ -1997,9 +2298,107 @@ try:
 finally:
     _qamod.active_judges, _qamod.LEGACY_JUDGES, _prov.make = _lp_prev
 # Fallback order is a cost order: a metered lane must be the last resort, not the first.
+# Stated over the whole metered SET rather than one lane id, because the set grows: the
+# invariant is "nothing that bills per token is reached before the free lanes", and a test
+# pinned to one endpoint stops enforcing it the moment a second metered lane is added.
+_metered = set(_qamod.METERED_LANES)
 case('a metered lane is the last resort, never the first fallback',
-     _qamod.LEGACY_JUDGES[-1].startswith('deepseek:')
-     and not _qamod.LEGACY_JUDGES[0].startswith('deepseek:'))
+     set(_qamod.LEGACY_JUDGES[-len(_metered):]) == _metered
+     and _qamod.LEGACY_JUDGES[0] not in _metered
+     and all(m in _qamod.JUDGES for m in _metered))
+
+print('== a subjective finding needs corroboration when the profile asks for it ==')
+
+
+_cor_prev = (_qg.defect_corroboration, _qg.independence, _qg.judge_identity, _qg.JUDGES)
+try:
+    _qg.JUDGES = {'la:m1', 'lb:m2', 'lc:m3'}
+    _qg.independence = lambda: 'lane'
+    _qg.judge_identity = lambda j: j
+    # Default: one judge's defect blocks, which is what the strict reading wants.
+    _qg.defect_corroboration = lambda: 1
+    case('by default a single defect blocks',
+         _qg.panel_problem([_v('la:m1'), _v('lb:m2', d='defect', r='취향')],
+                           'EN', 'KO', '') is not None)
+    _qg.defect_corroboration = lambda: 2
+    case('with corroboration asked for, a lone defect does not block',
+         _qg.panel_problem([_v('la:m1'), _v('lb:m2', d='defect', r='취향')],
+                           'EN', 'KO', '') is None)
+    case('two judges agreeing on a defect still blocks',
+         'corroborated' in (_qg.panel_problem(
+             [_v('la:m1', d='defect', r='오역'), _v('lb:m2', d='defect', r='오역')],
+             'EN', 'KO', '') or ''))
+    # A score is a measurement, not a preference: one judge below the floor still blocks.
+    case('a single score below the floor blocks even with corroboration asked for',
+         'below floor' in (_qg.panel_problem(
+             [_v('la:m1'), _v('lb:m2', a=2)], 'EN', 'KO', '') or ''))
+    # Corroboration must not manufacture coverage: a dissent is still one examination.
+    case('a dissenting judge still counts as having examined the pair',
+         _qg.panel_problem([_v('la:m1', d='defect', r='취향')], 'EN', 'KO', '')
+         is not None)
+    # The producing model's PASS is self-serving and counts for nothing, but its DEFECT is
+    # an admission against interest: corroboration does not apply to it, because the reason
+    # for corroboration is noisy disagreement BETWEEN independent judges, and a model
+    # calling its own output wrong is not that.
+    case('a defect from the producing lane still blocks on its own',
+         'produced it' in (_qg.panel_problem(
+             [_v('la:m1'), _v('lb:m2'), _v('lc:m3', d='defect', r='자기 판정')],
+             'EN', 'KO', 'lc:m3') or ''))
+    case("the producing lane's pass still counts for nothing",
+         _qg.panel_problem([_v('la:m1'), _v('lb:m2')], 'EN', 'KO', 'lb:m2') is not None)
+finally:
+    (_qg.defect_corroboration, _qg.independence,
+     _qg.judge_identity, _qg.JUDGES) = _cor_prev
+# The threshold comes from a profile, so a wrong value must be refused rather than guessed.
+# Zero would let a unanimous defect ship, which is the opposite of what the knob is for.
+def _refuses(fn, needle):
+    try:
+        fn()
+    except BaseException as exc:        # SystemExit is how this layer refuses
+        return needle in str(exc)
+    return False
+
+
+_cor_cfg_prev = config.prof
+try:
+    config.prof = lambda k, *a: 0 if k == 'defect_corroboration' else _cor_cfg_prev(k, *a)
+    case('a threshold of zero is refused, not silently accepted',
+         _refuses(_qg.defect_corroboration, 'at least 1'))
+    config.prof = lambda k, *a: 'two' if k == 'defect_corroboration' else _cor_cfg_prev(k, *a)
+    case('a non-integer threshold is refused',
+         _refuses(_qg.defect_corroboration, 'must be an integer'))
+    config.prof = lambda k, *a: None if k == 'defect_corroboration' else _cor_cfg_prev(k, *a)
+    case('an absent declaration keeps the strict default of one',
+         _qg.defect_corroboration() == 1)
+finally:
+    config.prof = _cor_cfg_prev
+
+print('== a repair is remembered until the seal makes it visible again ==')
+# The selector compares a verdict against the SEALED value, so a repair cannot be seen
+# until the next seal. Without a memory, a second pass over one seal re-translates every
+# row the first pass fixed - at full cost, reporting success both times.
+from hanpatch import run as _run  # noqa: E402
+_rs_dir = tempfile.mkdtemp()
+_rs_prev = _run.REPAIRED_PATH
+try:
+    _run.REPAIRED_PATH = lambda: os.path.join(_rs_dir, 'repaired-since-seal.json')
+    case('nothing is remembered before any repair', _run.repaired_since_seal() == set())
+    _run.note_repaired({'あ': 'ko1', 'い': 'ko2'})
+    case('a repair is remembered', _run.repaired_since_seal() == {'あ', 'い'})
+    _run.note_repaired({'う': 'ko3'})
+    case('a later family adds to the record rather than replacing it',
+         _run.repaired_since_seal() == {'あ', 'い', 'う'})
+    _run.note_repaired({})
+    case('storing nothing records nothing',
+         _run.repaired_since_seal() == {'あ', 'い', 'う'})
+    _run.clear_repaired()
+    case('the seal clears the record, so the selector reads the new values itself',
+         _run.repaired_since_seal() == set())
+    _run.clear_repaired()
+    case('clearing twice is not an error', _run.repaired_since_seal() == set())
+finally:
+    _run.REPAIRED_PATH = _rs_prev
+    shutil.rmtree(_rs_dir, ignore_errors=True)
 
 print('== the script book stays openable on a full-size corpus ==')
 from hanpatch import scriptbook as _sb
@@ -2107,6 +2506,52 @@ finally:
     config.set_root(_so_prev)
     shutil.rmtree(_so_root, ignore_errors=True)
 
+print('== DQ7 rendered substitution widths ==')
+_dq7_root = '/mnt/ssd256/dq7-kr'
+_dq7_record = os.path.join(_dq7_root, 'work', 'ko', 'text_ko.json')
+_dq7_font = os.path.join(_dq7_root, 'work', 'ko', 'iwamaru_p15.bcfnt')
+if (os.path.exists(os.path.join(_dq7_root, config.PROJECT_FILE))
+        and os.path.exists(_dq7_record) and os.path.exists(_dq7_font)):
+    _dq7_prev = config.root()
+    try:
+        config.set_root(_dq7_root)
+        _dq7_text = json.load(open(_dq7_record))['#000000']['#000005.txt']
+        _dq7_budget = wrap.budget_for('#000000')
+        _dq7_rewrapped = wrap.rewrap(_dq7_text, _dq7_budget, soft=True)
+        case('fixed party substitutions use their measured Korean widths',
+             {tag: wrap.text_width(tag) for tag in ('{AILA}', '{GABO}', '{KEAFA}',
+                                                     '{MALIBELL}', '{MELBIN}')}
+             == {'{AILA}': 42, '{GABO}': 28, '{KEAFA}': 28,
+                 '{MALIBELL}': 42, '{MELBIN}': 28})
+        case('the declared player-name default keeps a fitting HERO greeting together',
+             wrap.rewrap('{HERO} 안녕', _dq7_budget) == '{HERO} 안녕')
+        _dq7_widths, _dq7_default = wrap.SUBST_WIDTHS, wrap.SUBST_WIDTH_DEFAULT
+        try:
+            wrap.SUBST_WIDTHS, wrap.SUBST_WIDTH_DEFAULT = {}, None
+            try:
+                wrap.rewrap('{HERO} 안녕', _dq7_budget)
+                _dq7_missing_width_refused = False
+            except ValueError:
+                _dq7_missing_width_refused = True
+        finally:
+            wrap.SUBST_WIDTHS, wrap.SUBST_WIDTH_DEFAULT = _dq7_widths, _dq7_default
+        case('a substitution without title width evidence fails closed',
+             _dq7_missing_width_refused)
+        # The boundary is the BOX, measured on the device, not the longest source
+        # line. 321px came from the Japanese text and let 287px lines spill
+        # outside the frame on a real screen; 278px is the measured interior and
+        # this record now breaks into three lines that all stay inside it.
+        case('the declared dialogue budget is the measured box, not the source width',
+             _dq7_budget == 278)
+        case('the reported KEAFA record wraps before the visible boundary',
+             all(wrap.text_width(line) <= _dq7_budget
+                 for line in _dq7_rewrapped.splitlines())
+             and _dq7_rewrapped.startswith(
+                 '{KEAFA}「우리가 마음대로 여기 출입하고\n있다는 게 성 안의'))
+    finally:
+        config.set_root(_dq7_prev)
+else:
+    skip('DQ7 rendered substitution widths (shipped project or font unavailable)')
 print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed, {len(SKIP)} skipped')
 if SKIP and not HAVE_CORPUS:

@@ -112,6 +112,12 @@ def build(src_path=None):
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, PATH())
+    # The seal is what makes a repair visible to the repair selector again: it compares a
+    # verdict against the SEALED value, so until now every row repaired since the previous
+    # seal had to be skipped to avoid paying for it twice. Clear that record here, at the
+    # one moment it stops being true.
+    from hanpatch import run as runmod
+    runmod.clear_repaired()
     print(f'manifest: {len(entries)} entries, digest {doc["digest"][:16]} -> {PATH()}')
     LAST_EXAMINED = doc['count']
     return doc

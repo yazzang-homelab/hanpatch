@@ -306,6 +306,10 @@ def _refuse_unenforceable(gl, hard):
             'unit or move the term out of hard_terms.')
 
 
+# Katakana proper, plus the長音符 and the small kana that only ever extend a katakana word.
+_KATAKANA_ONLY = re.compile(r'[\u30a0-\u30ff\u31f0-\u31ff\uff66-\uff9d]+')
+
+
 def matches_term(term, blob, fold_case=False):
     """True when `term` occurs in `blob` as a whole term, per the source language.
 
@@ -321,7 +325,26 @@ def matches_term(term, blob, fold_case=False):
     in kana/kanji, so the flag has no effect for `ja`.
     """
     if config.source_lang() == 'ja':
-        return term in blob
+        # The cheap reject first. `relevant()` runs this for every term against every
+        # row - 6355 terms over 90493 rows is 575 million calls - so paying for a regex
+        # scan on terms that are not in the row at all made a manifest build take longer
+        # than the translation it validates.
+        if term not in blob:
+            return False
+        if not _KATAKANA_ONLY.fullmatch(term):
+            return True
+        # A katakana word ends where katakana ends. リンダ inside ミリンダ is a different
+        # name, and ガボ inside ガボッ is the character's chewing noise rather than the
+        # character - measured: those two collisions alone made 3 rows unshippable,
+        # because the mandate demanded a rendering that is wrong for the word that is
+        # actually there. A substring test IS the whole-term test for kanji and mixed
+        # script, where there is no run to end; only katakana has this boundary.
+        for m in re.finditer(re.escape(term), blob):
+            before = blob[m.start() - 1:m.start()]
+            after = blob[m.end():m.end() + 1]
+            if not (_KATAKANA_ONLY.fullmatch(before) or _KATAKANA_ONLY.fullmatch(after)):
+                return True
+        return False
     flags = re.I if fold_case else 0
     return re.search(r'\b' + re.escape(term) + r'\b', blob, flags) is not None
 

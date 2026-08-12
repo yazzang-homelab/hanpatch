@@ -30,6 +30,7 @@ Layering: this module must not import the wording layer (translate, glossary,
 josa, providers, wrap). The test suite fails the build if it does.
 """
 import json
+import hashlib
 import os
 import shutil
 
@@ -37,18 +38,66 @@ from hanpatch import adapter
 from hanpatch import config
 from hanpatch import tm
 from hanpatch.formats import darc
+from hanpatch.formats import dq7table
 from hanpatch.formats import fpt0
 from hanpatch.formats import fpttxt
 from hanpatch.platforms import threeds
+from hanpatch.platforms.threeds import blz
 from hanpatch.platforms.threeds import keys as keysmod
 from hanpatch.platforms.threeds.bcfnt import Bcfnt
 
 MESS_DIR = 'MESS'
 LAYOUT_DIR = 'LAYOUT'
+# Every menu label, item, monster, job, place and speaker name lives in these two
+# directories as plain UTF-8 text, outside the /MESS containers. Translating /MESS alone
+# ships a game whose dialogue is Korean but whose menus, and the names those Korean lines
+# interpolate, are still Japanese.
+TABLE_DIRS = ('MENULIST', 'TEXT')
 ARC_EXT = '.arc'
 FONT_EXT = '.bcfnt'
 FPT_EXT = '.fpt'
 TEXT_EXT = '.txt'
+
+# The retail new-game field is empty and the grid offers kana only, so a Korean
+# player cannot enter a name at all. "아루스" is an explicit localization
+# fallback supported by Square Enix's official novel/manga pages, NOT a claim
+# about a retail default.
+#
+# Measured on the decompressed .code (load base 0x100000), not assumed:
+#   LoadMenuMain::startKeyboardWindow  VA 0x1BB4A0, new game only
+#     0x1BB524  ldr r1, [pc, #100]   -> literal 0x004F1D24, the STATIC
+#                                       KeyboardWindow object
+#     0x1BB538  str r2, [r3, #0xB9C] -> the four-character limit
+#     0x1BB584  nop                  -> hook slot: a real nop immediately
+#                                       before `pop {r4, r5, pc}`, so no
+#                                       instruction has to be displaced
+#   KeyboardWindow::getPlayerName      VA 0x249A04 reads the entered text from
+#                                       object +0xA0C, so the input buffer is
+#                                       0x004F1D24 + 0xA0C = 0x004F2730.
+# The 128-byte buffer cleared at 0x1BB4E0 is the TITLE scratch. Writing there
+# is exactly what the previous attempt did, and it prefilled nothing.
+_CODE_RAW_SIZE = 1816876
+_CODE_RAW_SHA256 = '47f72aa5bdaf6aa61d2c9d0ae6caaabc7e99f3e7fa4c88c4aa125a15a0bc3081'
+_CODE_DEC_SIZE = 0x30A000
+_CODE_DEC_SHA256 = '600bda939ef3cb6293150352754ee3ca1a2a13679a9b957f55e445e31dcf8f18'
+_CODE_PATCHED_SHA256 = 'b96b2c3ac267b709a8645b11d8c9313414ca5dda6b65f1f4ec3e29379fbedec2'
+_CODE_NEW_GAME_CALL = 0x0BB584
+_CODE_CAVE = 0x2A683C
+_CODE_NEW_GAME_ORIGINAL = bytes.fromhex('0000a0e1')          # nop
+_CODE_NEW_GAME_HOOK = bytes.fromhex('acac07eb')              # bl 0x3A683C
+_CODE_HOOK = bytes.fromhex(
+    '03402de9'   # push {r0, r1, lr}
+    '18009fe5'   # ldr  r0, [pc, #0x18]  -> 0x004F2730, the input buffer
+    '18109fe5'   # ldr  r1, [pc, #0x18]  -> first UTF-8 word
+    '001080e5'   # str  r1, [r0]
+    '14109fe5'   # ldr  r1, [pc, #0x14]  -> second UTF-8 word
+    '041080e5'   # str  r1, [r0, #4]
+    'a410a0e3'   # mov  r1, #0xA4
+    'b810c0e1'   # strh r1, [r0, #8]     -> last byte plus NUL terminator
+    '0380bde8'   # pop  {r0, r1, pc}
+    '30274f00'   # .word 0x004F2730
+    'ec9584eb'   # .word 0xEB8495EC      -> UTF-8 EC 95 84 EB
+    'a3a8ec8a')  # .word 0x8AECA8A3      -> UTF-8 A3 A8 EC 8A
 
 
 @adapter.register('dq7')
@@ -67,6 +116,21 @@ class DragonQuest7(adapter.Adapter):
 
     def mess_dir(self):
         return os.path.join(self.romfs_dir, MESS_DIR)
+
+    def tables(self):
+        """Every string-table file under the table directories, RomFS-relative."""
+        out = []
+        for d in TABLE_DIRS:
+            root = os.path.join(self.romfs_dir, d)
+            if not os.path.isdir(root):
+                continue
+            out += [f'{d}/{f}' for f in sorted(os.listdir(root))
+                    if f.endswith(TEXT_EXT)]
+        return out
+
+    def _read_table(self, rel):
+        with open(os.path.join(self.romfs_dir, *rel.split('/')), 'rb') as fh:
+            return dq7table.parse(rel, fh.read())
 
     def _keystore(self):
         """A cartridge NCCH is encrypted; the CIA reference path never needed this."""
@@ -154,6 +218,17 @@ class DragonQuest7(adapter.Adapter):
             if rows:
                 src[family] = rows
 
+        tables = 0
+        for rel in self.tables():
+            table = self._read_table(rel)
+            rows = [{'key': key, 'en': text, 'jp': ''}
+                    for _i, (key, text) in sorted(table.rows.items())]
+            if rows:
+                src[dq7table.family_of(rel)] = rows
+                tables += 1
+        print(f'tables: {tables} string tables, '
+              f'{sum(len(v) for k, v in src.items() if k.startswith("@"))} rows')
+
         fonts = {}
         for name, slots in sorted(self.font_slots().items()):
             arc, member = slots[0]
@@ -189,23 +264,60 @@ class DragonQuest7(adapter.Adapter):
     def _stage_romfs(self):
         """Mirror the extracted tree, linking everything the patch never touches.
 
-        The RomFS is 1.4 GB and only /MESS changes, so copying the whole tree per
-        build would spend minutes moving bytes that cannot differ. Symlinks are
-        resolved by the RomFS writer, and /MESS itself is a real copy so the
-        extracted source stays pristine.
+        The RomFS is 1.4 GB and only /MESS and the string tables change, so copying the
+        whole tree per build would spend minutes moving bytes that cannot differ.
+        Symlinks are resolved by the RomFS writer, and the directories the patch rewrites
+        are real copies so the extracted source stays pristine.
         """
         stage = config.p('build', 'romfs')
         if os.path.exists(stage):
             shutil.rmtree(stage)
         os.makedirs(stage)
+        written = (MESS_DIR,) + TABLE_DIRS
         for name in sorted(os.listdir(self.romfs_dir)):
             src = os.path.join(self.romfs_dir, name)
             dst = os.path.join(stage, name)
-            if name == MESS_DIR:
+            if name in written:
                 shutil.copytree(src, dst, symlinks=False)
             else:
                 os.symlink(os.path.abspath(src), dst)
         return stage
+
+    def _prefilled_code(self):
+        """Patch only the new-game keyboard to prefill the Korean fallback name."""
+        path = config.extracted('exefs', '.code')
+        adapter.require(path, 'extracted ExeFS .code (run extract first)')
+        with open(path, 'rb') as fh:
+            raw = fh.read()
+        digest = hashlib.sha256(raw).hexdigest()
+        if len(raw) != _CODE_RAW_SIZE or digest != _CODE_RAW_SHA256:
+            raise SystemExit(
+                f'INJECT BLOCKED: unsupported DQ7 .code ({len(raw)} bytes, {digest}); '
+                'the name prefill patch is pinned to the verified cartridge executable')
+        decoded = bytearray(blz.decompress(raw))
+        decoded_digest = hashlib.sha256(decoded).hexdigest()
+        if len(decoded) != _CODE_DEC_SIZE or decoded_digest != _CODE_DEC_SHA256:
+            raise SystemExit(
+                f'INJECT BLOCKED: unexpected decompressed DQ7 .code '
+                f'({len(decoded)} bytes, {decoded_digest})')
+        checks = (
+            (_CODE_NEW_GAME_CALL, _CODE_NEW_GAME_ORIGINAL, 'new-game call site'),
+            (_CODE_CAVE, b'\0' * len(_CODE_HOOK), 'executable code cave'),
+        )
+        for offset, expected, label in checks:
+            if decoded[offset:offset + len(expected)] != expected:
+                raise SystemExit(f'INJECT BLOCKED: DQ7 {label} preimage mismatch')
+        decoded[_CODE_NEW_GAME_CALL:_CODE_NEW_GAME_CALL + 4] = _CODE_NEW_GAME_HOOK
+        decoded[_CODE_CAVE:_CODE_CAVE + len(_CODE_HOOK)] = _CODE_HOOK
+        patched_digest = hashlib.sha256(decoded).hexdigest()
+        if patched_digest != _CODE_PATCHED_SHA256:
+            raise SystemExit(
+                f'INJECT BLOCKED: patched DQ7 .code digest {patched_digest} is not '
+                'the reviewed executable patch')
+        compressed = blz.compress(bytes(decoded))
+        if blz.decompress(compressed) != decoded:
+            raise SystemExit('INJECT BLOCKED: DQ7 .code BLZ round-trip mismatch')
+        return compressed
 
     def inject(self, entries, rom, out):
         adapter.require(self.romfs_dir, 'extracted RomFS (run extract first)')
@@ -251,6 +363,31 @@ class DragonQuest7(adapter.Adapter):
             with open(os.path.join(stage, MESS_DIR, fname), 'wb') as fh:
                 fh.write(data)
 
+        for rel in self.tables():
+            table = self._read_table(rel)
+            family = dq7table.family_of(rel)
+            touched = False
+            for i, (key, text) in list(table.rows.items()):
+                stats['total'] += 1
+                t = left.pop(f'{family}/{key}', None)
+                if t is not None:
+                    # A table row is one stored line. A translation carrying a newline
+                    # would silently split the record and shift every later field.
+                    if '\n' in t or '\r' in t:
+                        raise SystemExit(
+                            f'INJECT BLOCKED: {rel}:{key} translation contains a line '
+                            f'break; this record stores exactly one line')
+                    table.rows[i] = (key, t)
+                    stats['translated'] += 1
+                    touched = True
+                elif tm.is_skip(text, key) or not text.strip():
+                    stats['skipped'] += 1
+                else:
+                    missing.append(f'{family}/{key}')
+            if touched:
+                with open(os.path.join(stage, *rel.split('/')), 'wb') as fh:
+                    fh.write(dq7table.build(table, rel))
+
         if missing:
             raise SystemExit(f'INJECT BLOCKED: {len(missing)} shippable records '
                              f'absent from the manifest, e.g. {missing[:5]}')
@@ -271,7 +408,14 @@ class DragonQuest7(adapter.Adapter):
         # CIA-only and misparses a cartridge (repack.Cia raises struct.error on
         # this image), so the agnostic entry point is the correct call rather than
         # a stylistic preference.
-        threeds.rebuild(rom, image, out, keystore=self._keystore())
+        # `decrypt_output` is a per-title profile fact, not a style choice: an
+        # encrypted cartridge image is refused by every emulator this patch is
+        # played on (Azahar 2126.0 stops at "Your ROM is Encrypted"), so a
+        # release that ships one is unplayable no matter how good the text is.
+        threeds.rebuild(
+            rom, image, out, keystore=self._keystore(),
+            exefs_replacements={'.code': self._prefilled_code()},
+            decrypt=bool(config.prof('decrypt_output')))
         stats['size'] = os.path.getsize(out)
         stats['container'] = threeds.detect(out)
         return stats
@@ -412,7 +556,24 @@ class DragonQuest7(adapter.Adapter):
             by_family.setdefault(fam, {})[k] = entries[key]
 
         checked = 0
+        table_family = {dq7table.family_of(rel): rel for rel in self.tables()}
         for family, wanted in sorted(by_family.items()):
+            rel = table_family.get(family)
+            if rel is not None:
+                member = '/' + rel
+                try:
+                    blob = threeds.read_romfs_file(image, member)
+                except KeyError:
+                    problems.append(f'{member} missing from the rebuilt RomFS')
+                    continue
+                got = {k: t for _i, (k, t) in dq7table.parse(rel, blob).rows.items()}
+                for k, want in wanted.items():
+                    checked += 1
+                    if k not in got:
+                        problems.append(f'{family}/{k}: record vanished')
+                    elif got[k] != want:
+                        problems.append(f'{family}/{k}: text differs after round-trip')
+                continue
             member = f'/{MESS_DIR}/{family}{FPT_EXT}'
             try:
                 blob = threeds.read_romfs_file(image, member)

@@ -18,6 +18,22 @@ SKIP_RE = re.compile(
 SKIP_KEY_RE = re.compile(r'^test_\d+$')
 
 
+def _tag_only(t):
+    """Whether the row is markup and nothing else.
+
+    A row like `<JA_HP>` or `{PRE_WORD}` carries no text: the engine substitutes a value
+    or a name at that position, so there is nothing to translate and putting a Korean word
+    there breaks the UI it draws. This is opt-in per title (`skip_tag_only`) because it is
+    a fact about a title's markup, not a universal one - the reference title has two
+    tag-only rows of its own, and skipping them would drop its manifest from 3262 to 3260
+    entries and change bytes that must not change.
+    """
+    if not config.prof('skip_tag_only'):
+        return False
+    pattern = config.prof('tag_pattern')
+    return bool(pattern) and not re.sub(pattern, '', t).strip()
+
+
 def is_skip(s, key=None):
     t = s.strip()
     if key is not None:
@@ -25,7 +41,7 @@ def is_skip(s, key=None):
             return True      # placeholder rows whose text is just their own key
         if SKIP_KEY_RE.match(key.strip()):
             return True      # stage1 test table (assets live under fa/test/**)
-    return t in SKIP or bool(SKIP_RE.match(t))
+    return t in SKIP or bool(SKIP_RE.match(t)) or _tag_only(t)
 
 SUFFIX_RE = [
     re.compile(r'^(?P<base>.+) (?P<suf>[A-Z])$'),
