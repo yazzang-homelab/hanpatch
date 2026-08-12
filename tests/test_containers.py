@@ -29,6 +29,7 @@ from hanpatch.platforms.threeds import ncsd as ncsdmod  # noqa: E402
 from hanpatch.platforms.threeds import romfs as romfsmod  # noqa: E402
 from hanpatch.adapters import dq7 as dq7mod  # noqa: E402
 from hanpatch.formats import dq7table  # noqa: E402
+from hanpatch.formats import dmp as dmpmod  # noqa: E402
 from PIL import Image  # noqa: E402
 from hanpatch.platforms import threeds as threedsmod  # noqa: E402
 
@@ -787,6 +788,46 @@ case('a flipped byte inside a member is caught by the member hashes',
      threedsmod.exefs_member_hashes(_bad_member)['.code'] is False)
 case('the same flip is invisible to the superblock hash, which is why both run',
      threedsmod.superblock_hashes(_bad_member)['exefs'] is True)
+
+print()
+print('== DMP textures: the raw artwork form under /LAYOUTTEX ==')
+# 8x8 Morton tiles in ABGR. A naive linear/RGBA read produces scrambled blocks
+# with swapped channels, which is exactly the corruption that would ship if
+# artwork were replaced through a reader that "looked right" on a flat colour.
+_dmp_w, _dmp_h = 16, 8
+_dmp_img = Image.new('RGBA', (_dmp_w, _dmp_h))
+for _x in range(_dmp_w):
+    for _y in range(_dmp_h):
+        _dmp_img.putpixel((_x, _y), (_x * 16, _y * 32, 255 - _x * 8, 255 - _y * 16))
+_dmp_bytes = dmpmod.encode(_dmp_img)
+case('an encoded texture carries the measured 16-byte header',
+     _dmp_bytes[:8] == b'DMP\x03' + b'8888'
+     and struct.unpack_from('<4H', _dmp_bytes, 8) == (_dmp_w, _dmp_h, _dmp_w, _dmp_h))
+case('a texture round trips pixel-for-pixel through the tiling',
+     list(dmpmod.decode(_dmp_bytes).getdata()) == list(_dmp_img.getdata()))
+case('the first stored pixel is ABGR, not RGBA',
+     _dmp_bytes[16:20] == bytes((255, 255, 0, 0)))
+# Tiling is only provable against a size that is more than one tile wide, which
+# is where a linear reader and a tiled reader disagree.
+case('the second tile starts after 64 pixels, not after one row',
+     _dmp_bytes[16 + 64 * 4:16 + 64 * 4 + 4]
+     == bytes((_dmp_img.getpixel((8, 0))[3], _dmp_img.getpixel((8, 0))[2],
+               _dmp_img.getpixel((8, 0))[1], _dmp_img.getpixel((8, 0))[0])))
+case('a replacement of the wrong size is refused, not scaled', raises(
+    lambda: dmpmod.encode(Image.new('RGBA', (8, 8)), _dmp_bytes),
+    'Resize it first'))
+case('a format this reader never measured is refused', raises(
+    lambda: dmpmod.parse(b'DMP\x03' + b'4444' + struct.pack('<4H', 8, 8, 8, 8)
+                         + b'\0' * 256),
+    'has no encoder here'))
+case('a size that is not a whole number of tiles is refused', raises(
+    lambda: dmpmod.parse(b'DMP\x03' + b'8888' + struct.pack('<4H', 12, 8, 12, 8)
+                         + b'\0' * (12 * 8 * 4)),
+    'whole number of'))
+case('a truncated payload is refused instead of read past the end', raises(
+    lambda: dmpmod.parse(b'DMP\x03' + b'8888' + struct.pack('<4H', 8, 8, 8, 8)
+                         + b'\0' * 16),
+    'needs'))
 
 print()
 print('== decrypted output: what an emulator will actually boot ==')
