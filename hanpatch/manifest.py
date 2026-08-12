@@ -25,7 +25,13 @@ def PATH():
     return config.out('manifest.json')
 def OVERRIDE():
     return config.out('text_%s.json' % config.target())
-RULESET = '2'
+# 3: Korean punctuation and josa are resolved deterministically on the way in -
+# the kuten no longer doubles a sentence end, a particle after a runtime
+# substitution is written in a form correct for every value it can take, and a
+# line may not break inside a word or open on a closing mark. A manifest sealed
+# under ruleset 2 holds text those rules would change, so it must be resealed
+# rather than shipped.
+RULESET = '3'
 
 
 def digest(entries):

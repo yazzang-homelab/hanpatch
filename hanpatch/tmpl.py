@@ -201,7 +201,10 @@ def translate(s, tmdb):
             return None
         out.append(t)
     res = (prefix + ' '.join(out)).strip()
-    res, _ = josa.fix_after(res, set(TARGET.values()))
+    # The same josa pass the gate applies. A rule-derived row that guessed a
+    # particle after a substitution token would be rewritten by `translate.check`
+    # on the way in anyway, and two spellings of one rule is how they drift.
+    res, _ = josa.auto(res, set(TARGET.values()))
     return res
 
 

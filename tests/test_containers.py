@@ -295,8 +295,17 @@ case('the standalone applier refuses the wrong source', rc.returncode != 0)
 
 print('== release bundle ==')
 from hanpatch import config, release  # noqa: E402
+from hanpatch import manifest as _manmod  # noqa: E402
 case('a non-bundle file is rejected', raises(lambda: release.inspect(kt)))
-if ROM and os.path.exists('/root/tmp/crimson-kr/work/ko/manifest.approved'):
+# A seal carries the ruleset it was built under, and `manifest.load` refuses an
+# older one rather than packing text today's rules would change. So these cases
+# need a reference project sealed under the CURRENT ruleset - saying which one it
+# holds, instead of reporting a skip that looks like "no project here".
+_ref_seal = '/root/tmp/crimson-kr/work/ko/manifest.json'
+_ref_ruleset = (json.load(open(_ref_seal)).get('ruleset')
+                if os.path.exists(_ref_seal) else None)
+if (ROM and os.path.exists('/root/tmp/crimson-kr/work/ko/manifest.approved')
+        and _ref_ruleset == _manmod.RULESET):
     config.set_root('/root/tmp/crimson-kr')
     hpk = os.path.join(TMP, 'r.hpk')
     info = release.create(out=hpk,
@@ -318,6 +327,10 @@ if ROM and os.path.exists('/root/tmp/crimson-kr/work/ko/manifest.approved'):
     case('applying a bundle to the wrong ROM is refused', raises(
         lambda: release.apply(hpk, kt, out=os.path.join(TMP, 'x.cia')),
         'mismatch'))
+elif _ref_ruleset is not None and _ref_ruleset != _manmod.RULESET:
+    print(f'  skip bundle cases (the reference project is sealed under ruleset '
+          f'{_ref_ruleset}, this build is {_manmod.RULESET}: reseal and re-approve '
+          f'it with `hanpatch gates`)')
 else:
     print('  skip bundle cases (no approved reference project)')
 

@@ -75,10 +75,21 @@ def main():
                 continue
             stats['translated'] += 1
             sub = glossary.relevant(gl, [en], family)
-            _, probs = translate.check(en, ko, sub, family,
-                                       capmod.group(family, it['key']))
+            fixed, probs = translate.check(en, ko, sub, family,
+                                           capmod.group(family, it['key']))
             for p in probs:
                 fails[p.split(':')[0]].append(f'{family}:{it["key"]} :: {p}')
+            # A gate that only normalises cannot fail, so a rule added after the
+            # seal was written is invisible here: `check` quietly returns the
+            # repaired string and audit throws it away. Measured when the
+            # punctuation and josa passes landed - 7905 sealed rows carried `….`
+            # and 2416 a guessed particle after a runtime name, and audit reported
+            # the corpus clean. The sealed value must equal what today's rules
+            # produce from it, or the ROM ships text this build disagrees with.
+            if not probs and fixed != ko:
+                fails['normalisation-drift'].append(
+                    f'{family}:{it["key"]} :: sealed {ko[:40]!r} != normalised '
+                    f'{fixed[:40]!r}')
             # register mixing inside one string
             # Register belongs to a SENTENCE, not to a line. A dialogue box wraps mid
             # sentence, so classifying each line makes any wrap look like a sentence ending.

@@ -85,6 +85,20 @@ def rejects(en, ko, kind='dialogue', group=None, needle=None):
     return bool(probs)
 
 
+def _prov_refuses(fn, needle):
+    """True when `fn` fails closed with `needle` in its diagnostic.
+
+    Generic, and defined here rather than beside the provider cases that named
+    it: every fail-closed rule in the pipeline is asserted this way, including
+    the profile-validation ones far above them.
+    """
+    try:
+        fn()
+        return False
+    except SystemExit as exc:
+        return needle in str(exc)
+
+
 def accepts(en, ko, kind='dialogue', group=None):
     _, probs = tr.check(en, ko, glossary.relevant(GL, [en], kind), kind, group)
     if probs:
@@ -201,6 +215,102 @@ case('particle after a fixed proper noun is corrected',
 case('eu-ro after a vowel-final syllable is corrected',
      josa.fix_eu_ro('서고으로 돌아왔다') == '서고로 돌아왔다')
 
+# A particle after a RUNTIME substitution agrees with a syllable that does not
+# exist until the engine draws the line. 2416 shipped rows had one guessed by the
+# model - 1084 `는` against 500 `은` - which is wrong for about half the values the
+# token can take, and the reader sees `아루스은`. The three outcomes below are the
+# whole policy: resolve it where the title declares the rendering is fixed, write
+# the both-forms particle where it is not, and refuse the row where the particle
+# has no readable both-forms shape.
+_jsroot = tempfile.mkdtemp(prefix='hanpatch-josa-')
+json.dump({'title': 'js', 'platform': 'threeds', 'adapter': 'crimson_shroud',
+           'target': 'ko', 'profile': 'p.json'},
+          open(os.path.join(_jsroot, config.PROJECT_FILE), 'w'))
+
+
+def _with_profile(prof, fn):
+    json.dump(prof, open(os.path.join(_jsroot, 'p.json'), 'w'))
+    _prev = config.root()
+    config.set_root(_jsroot)
+    try:
+        return fn()
+    finally:
+        if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+            config.set_root(_prev)
+
+
+_JS_PROF = {'budget': {'default': 64}, 'engine_wraps': True,
+            'movable_tags': ['{HERO}', '{I_NAME}', '{KEAFA}', '{MALIBELL}'],
+            'substitution_values': {'{KEAFA}': '키파', '{MALIBELL}': '마리벨'}}
+
+
+def _josa(text, prof=None):
+    return _with_profile(prof or _JS_PROF, lambda: josa.auto(text))
+
+
+case('a declared fixed substitution resolves to one particle',
+     _josa('{KEAFA}은 웃었다')[0] == '{KEAFA}는 웃었다'
+     and _josa('{MALIBELL}는 웃었다')[0] == '{MALIBELL}은 웃었다')
+case('a runtime substitution gets the both-forms particle, not a guess',
+     _josa('{HERO}은 검을 들었다')[0] == '{HERO}은(는) 검을 들었다'
+     and _josa('{I_NAME}를 얻었다')[0] == '{I_NAME}을(를) 얻었다')
+case('the both-forms shape follows Korean convention, not a mechanical join',
+     _josa('{HERO}으로 정했다')[0] == '{HERO}(으)로 정했다'
+     and _josa('{HERO}이라 불린다')[0] == '{HERO}(이)라 불린다')
+case('a particle with no readable both-forms shape is refused, not invented',
+     any('both-forms' in p for p in _josa('{HERO}였다')[1])
+     and _josa('{HERO}였다')[0] == '{HERO}였다')
+case('hand-written both-forms shapes are folded into one',
+     {_josa('{HERO}' + v + ' 갔다')[0] for v in ('(은)는', '은/는', '은 (는)', '는(은)')}
+     == {'{HERO}은(는) 갔다'})
+# A line break between the token and its particle is the old wrapper's signature,
+# and it also hid the particle from the resolver: 58 shipped rows carried both
+# defects at once. A plain space in the same position is a wording decision and is
+# left alone.
+case('a particle pushed onto the next line is rejoined and then resolved',
+     _josa('왜하면 {HERO}\n에게 물어봐')[0] == '왜하면 {HERO}에게 물어봐'
+     and _josa('왜하면 {HERO}\n은 갔다')[0] == '왜하면 {HERO}은(는) 갔다'
+     and _josa('왜하면 {HERO} 에게 물어봐')[0] == '왜하면 {HERO} 에게 물어봐')
+case('a both-forms particle after real Korean is resolved instead of kept',
+     _josa('마리벨은(는) 웃었다')[0] == '마리벨은 웃었다'
+     and _josa('키파은(는) 웃었다')[0] == '키파는 웃었다')
+# `placeholder_text` names ONE example rendering so the script book can be
+# searched by what a player saw, and its {HERO} entry is a name the player renames
+# at will. Resolving a particle from it would be correct only for the default name.
+case('an example rendering is not evidence that a substitution is fixed',
+     _josa('{HERO}은 갔다', dict(_JS_PROF, placeholder_text={'{HERO}': '아루스'},
+                              substitution_values={}))[0]
+     == '{HERO}은(는) 갔다')
+case('a fixed rendering declared for an unknown token is refused',
+     _prov_refuses(lambda: _josa('x', dict(_JS_PROF,
+                                           substitution_values={'{NOPE}': '없음'})),
+                   'not declared movable_tags'))
+
+print('== Korean punctuation ==')
+# The kuten and the touten are the Japanese source's punctuation. Converting them
+# is not new; leaving the converted stop standing next to a mark that already ended
+# the sentence was. Measured on the shipped DQ7 corpus: 7795 rows carried `….` and
+# 470 `~.`, all of them this pipeline's own rendering of `……。` and `～。`.
+def _punct(ko, lang='ja'):
+    return _with_profile({'budget': {'default': 64}, 'engine_wraps': True,
+                          'source_lang': lang},
+                         lambda: tr.normalise_punctuation(ko))
+
+
+case('the kuten becomes a full stop and the touten a comma',
+     _punct('그렇군。 하지만、 아니다。') == '그렇군. 하지만, 아니다.')
+case('a sentence does not end twice',
+     _punct('불의 산이……。') == '불의 산이……'
+     and _punct('그런가～。') == '그런가~'
+     and _punct('정말!。') == '정말!')
+case('a real full stop is not eaten',
+     _punct('그렇군. 하지만 아니다.') == '그렇군. 하지만 아니다.')
+case('whitespace in front of a closing mark is not a word gap',
+     _punct('몰라 ……이런 생각을') == '몰라……이런 생각을'
+     and _punct('그런 일이\n」') == '그런 일이」')
+case('a Latin-source title keeps its authored fullwidth punctuation',
+     _punct('。적이다！。 그가 신호를 보낸다.', 'en') == '。적이다！。 그가 신호를 보낸다.')
+
 print('== manifest gates ==')
 case('the digest changes when any value changes',
      manmod.digest({'a/b': 'x'}) != manmod.digest({'a/b': 'y'}))
@@ -209,7 +319,16 @@ case('the digest changes when a key is added',
 case('the digest is order independent',
      manmod.digest({'a/b': 'x', 'a/c': 'y'})
      == manmod.digest({'a/c': 'y', 'a/b': 'x'}))
+# A seal built under an older ruleset is REFUSED by `manifest.load`, which is the
+# point of the ruleset - it holds text the current rules would change. That is a
+# skip with a stated reason here, never a crash halfway through the suite.
+_seal_ruleset = None
 if HAVE_CORPUS:
+    _seal_ruleset = json.load(open(config.out('manifest.json'))).get('ruleset')
+if HAVE_CORPUS and _seal_ruleset != manmod.RULESET:
+    skip(f'manifest corpus cases (sealed under ruleset {_seal_ruleset}, this build '
+         f'is {manmod.RULESET}: reseal with `hanpatch gates`)')
+elif HAVE_CORPUS:
     doc = manmod.load()
     case('manifest holds a full corpus', len(doc['entries']) > 3000)
     tampered = dict(doc['entries'])
@@ -1392,14 +1511,6 @@ print('== free-provider rotation wiring ==')
 from hanpatch import providers as _prov  # noqa: E402
 
 
-def _prov_refuses(fn, needle):
-    try:
-        fn()
-        return False
-    except SystemExit as exc:
-        return needle in str(exc)
-
-
 # The rotator rule is narrowed, not dropped. Every FREE endpoint is still a loopback
 # rotator that owns its own credentials - that is what keeps budgets, retries and vendor
 # compatibility patches in one place. A PAID lane is the single exception and it is defined
@@ -1647,13 +1758,23 @@ case('a capacity value that is not a positive line count is refused',
 # because one page holding two lines is still under a box limit of four - and inject
 # would then refuse it, with the gate having reported clean.
 if _HAVE_EW_FONT:
+    # Spaced words, so the row rewraps at a legitimate break: a 60-syllable single
+    # word is refused one step earlier now, for not fitting one line at all, and
+    # would no longer exercise the storage rule this case is about.
+    _EW_LONG = '\uac00\ub098 ' * 30
     case('a per-line container refuses a line that rewraps, even under the box limit',
          any('cannot be stored' in p for p in
              _ew({'engine_wraps': False, 'capacity': {'dialogue': 4}},
-                 'a b', '\uac00' * 60)[1]))
+                 'a b', _EW_LONG)[1]))
     case('an engine-laid-out title may still grow a row up to the box limit',
          _ew({'engine_wraps': True, 'capacity': {'dialogue': 4}},
-             'a b', '\uac00' * 60)[1] == [])
+             'a b', _EW_LONG)[1] == [])
+    # A word wider than the box has no correct break point inside it, and the old
+    # loop emitted one anyway - character by character, with no problem raised.
+    case('a word too wide for the box is refused instead of broken mid-word',
+         any('inside the word' in p for p in
+             _ew({'engine_wraps': False, 'capacity': {'dialogue': 4}},
+                 'a b', '\uac00' * 60)[1]))
 else:
     skip('layout growth rules (no built reference font to measure with)')
 
@@ -2661,6 +2782,28 @@ if (os.path.exists(os.path.join(_dq7_root, config.PROJECT_FILE))
                  for line in _dq7_rewrapped.splitlines())
              and _dq7_rewrapped.startswith(
                  '{KEAFA}「우리가 마음대로 여기 출입하고\n있다는 게 성 안의'))
+        # Two shipped defects, reproduced against the real box: 58 rows put a
+        # runtime name at the end of a line and its particle at the head of the
+        # next one, and 116 rows opened a line on punctuation. Both are rows the
+        # box cannot hold as written, so the break has to move to the space in
+        # front of the name - never between the name and what is welded to it.
+        _dq7_welded = wrap.rewrap(
+            '「그것은 그것대로 여기서 잠시 기다려봐 {HERO}에게 물어봐.',
+            _dq7_budget, soft=True)
+        case('a runtime name is never split from the particle welded to it',
+             '{HERO}에게' in _dq7_welded.replace('\n', '|')
+             and not any(line.startswith('에게')
+                         for line in _dq7_welded.splitlines()))
+        _dq7_long = ('「이러면 공평하지 않다고 항의하고 싶지만 말이지, '
+                     '그러니까 지금은 참기로 했어 ……이렇게')
+        _dq7_orphan = wrap.rewrap(_dq7_long, _dq7_budget, soft=True)
+        case('no display line opens on punctuation once the wrapper is done',
+             wrap.prohibited_line_starts(
+                 wrap.rewrap(_dq7_long.replace(' ……', '……'),
+                             _dq7_budget, soft=True)) == []
+             # ... and where a space still separates it, the gate says so rather
+             # than drawing it: `normalise_punctuation` is what removes the space.
+             and wrap.prohibited_line_starts(_dq7_orphan) != [])
     finally:
         config.set_root(_dq7_prev)
 else:

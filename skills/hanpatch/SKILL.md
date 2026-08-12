@@ -90,6 +90,53 @@ one line it renders instead of borrowing its family's maximum.
 mandatory in the families that render them as UI labels and *forbidden* as
 mandates inside narrative prose, where they are ordinary words.
 
+**A particle after a runtime substitution has no single right answer, so stop
+asking the model for one.** Where a row carries `{HERO}` or `{I_NAME}`, the
+syllable the Korean particle agrees with does not exist until the engine draws
+the line. Measured on the shipped DQ7 corpus: 2416 rows had a particle welded to
+a substitution token and every one had been guessed — 1084 `는` against 500 `은`,
+364 `가` against 121 `이` — so roughly half of them read `아루스은` for some player.
+A further 506 rows carried a hand-written both-forms particle in four different
+shapes. `josa.auto` decides all of it deterministically: the token's rendering is
+resolved from the profile's `substitution_values` where the title declares that it
+is FIXED (a party member the player cannot rename), otherwise the both-forms
+particle `은(는)` / `(으)로` is written in one canonical shape, and a particle with
+no readable both-forms shape (`이었다`/`였다`) is REFUSED so the row is reworded
+rather than shipped wrong. `placeholder_text` is not evidence of a fixed value —
+it holds one example rendering for the script book's search, and its `{HERO}` entry
+is a name the player replaces. `josa.resolve()` is the single seam an engine-side
+run-time josa hook would replace; this build has no such hook, so the both-forms
+rendering is what actually ships and the skill does not pretend otherwise.
+
+**A line may not break inside a word, and may not open on a closing mark.** The
+wrapper breaks between *units*, and a unit is everything with no whitespace in
+it — a substitution token and the particle welded to it move together. Measured
+before that held: 58 shipped rows put a runtime name at the end of one line and
+its particle at the head of the next (the player reads `아루스`, then a line starting
+`에게`), and 116 rows opened a line on punctuation. A word wider than the box is
+*refused*, not split: the old fallback emitted a break character-by-character and
+raised no problem, which is exactly "단어 중간에서 줄이 넘어간다" with the gate
+reporting clean.
+
+**Japanese punctuation is converted, and a sentence does not end twice.** The
+kuten `。` becomes `.`, the touten `、` becomes `,`, the fullwidth wave dash becomes
+`~` — and then the converted stop is dropped where the sentence already ended in
+`…`, `!`, `?` or `~`. Measured: 7795 shipped rows carried `….` and 470 `~.`, 7905
+in all, every one of them this pipeline's own rendering of `……。` and `～。`.
+Scoped to a Japanese source, because the reference title authors fullwidth
+punctuation deliberately as an inner-monologue device. Whitespace in front of a
+closing mark goes with it — a wrapper that breaks at spaces is how ` ……` becomes a
+line that starts on an ellipsis.
+
+**A gate that only normalises cannot fail, so audit compares the seal against
+its own rules.** `translate.check` returns a repaired string, and `audit` used to
+throw that return value away and look only at the problem list — so every rule
+added after a manifest was sealed reported the corpus clean while the ROM shipped
+text the build disagreed with. `audit` now reports `normalisation-drift` for any
+sealed value that is not equal to what today's rules produce from it, and the
+manifest `RULESET` is bumped whenever those rules change so an old seal cannot be
+packed.
+
 **Two judges minimum, and a producer may not judge its own output.** One judge
 produces correlated false negatives — a reviewer sample found 4 real defects in
 5 strings a single judge had passed. Judge verdicts are structured

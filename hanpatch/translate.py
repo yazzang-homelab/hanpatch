@@ -379,8 +379,51 @@ def dq7_delimiter_problems(text):
 # value this function returns is the one the manifest seals, the panel judges and the
 # injector writes, so all three see the same string.
 _WS_RUN = re.compile(r'[ \u3000\t]{2,}')
-_FW_PUNCT = {'。': '.', '、': ',', '！': '!', '？': '?', '：': ':', '；': ';'}
+_FW_PUNCT = {'。': '.', '、': ',', '！': '!', '？': '?', '：': ':', '；': ';',
+             '～': '~', '〜': '~'}
 _FW_PUNCT_RE = re.compile('[' + ''.join(_FW_PUNCT) + ']')
+# A Korean sentence does not end twice. The kuten (`。`) becomes a full stop and
+# the touten (`、`) a comma, and where the sentence already ended in an ellipsis,
+# a wave dash or a bang the converted stop is left standing next to it. Measured
+# on the shipped DQ7 corpus: 7795 rows carried `….` and 470 `~.`, 7905 rows in
+# total, every one of them produced by this pipeline's own conversion of `……。`
+# and `～。` - the Japanese source writes both, the Korean rendering keeps only
+# the stronger mark.
+_TERMINAL = '…‥!?~'
+_REDUNDANT_STOP = re.compile('([' + re.escape(_TERMINAL) + r'])[.,]+')
+# Whitespace in front of a character that may not open a display line is never a
+# word gap: it is what lets `wrap` put a lone `」` or `?` at the head of the next
+# line. The set of such characters belongs to the layout module, which enforces it.
+_ORPHAN_SPACE = re.compile(r'[ \u3000\t\n]+(?=['
+                           + re.escape(''.join(wrap.NO_LINE_START)) + r'])')
+
+
+def normalise_punctuation(ko):
+    """Korean punctuation for a Japanese source, with no doubled sentence end.
+
+    Scoped to a Japanese source because the kuten and the touten are that
+    source's punctuation. The reference title authors fullwidth punctuation
+    deliberately - `。Ｆｉｅｎｄｓ！。` is its inner-monologue device - so rewriting it
+    there would replace an authored glyph with a guess and change bytes the
+    identity rebuild is pinned against.
+
+    Whitespace before a closing mark goes with it. Deleting it is not cosmetic:
+    `wrap` breaks lines at spaces, so ` ……` and ` 」` are exactly how 116 shipped
+    rows ended up with a line that opens on punctuation.
+    """
+    if source_lang() != 'ja' or not ko:
+        return ko
+    out = []
+    for piece in re.split(f'({TAG_RE.pattern})', ko):
+        if not piece:
+            continue
+        if TAG_RE.fullmatch(piece):
+            out.append(piece)
+            continue
+        piece = _FW_PUNCT_RE.sub(lambda m: _FW_PUNCT[m.group()], piece)
+        piece = _REDUNDANT_STOP.sub(lambda m: m.group(1), piece)
+        out.append(piece)
+    return _ORPHAN_SPACE.sub('', ''.join(out))
 
 
 def normalise_ja_layout(en, ko):
@@ -401,11 +444,8 @@ def normalise_ja_layout(en, ko):
         if TAG_RE.fullmatch(piece):
             out.append(piece)
             continue
-        # A run of padding is one word gap, never a hole. Full-width stops are the
-        # source's punctuation, not Korean punctuation, and reading them as Japanese
-        # residue is exactly what a player reported.
+        # A run of padding is one word gap, never a hole.
         piece = _WS_RUN.sub(' ', piece.replace('\u3000', ' '))
-        piece = _FW_PUNCT_RE.sub(lambda m: _FW_PUNCT[m.group()], piece)
         out.append(piece)
     ko = ''.join(out)
     # Per display line: no leading or trailing padding. `wrap.fits` re-flows the text
@@ -460,10 +500,12 @@ def check(en, ko, gl, kind='default', group=None):
         problems.append(f'soft-break marker {mark!r}: source has {en.count(mark)}, '
                         f'translation has {ko.count(mark)}')
         return ko, problems
+    ko = normalise_punctuation(ko)
     ko = normalise_ja_layout(en, ko)
-    # deterministic josa repair right after fixed proper nouns
-    ko, _ = josa.fix_after(ko, set(glossary.hard().values()))
-    ko = josa.fix_eu_ro(ko)
+    # Every josa decision in one pass: fixed proper nouns, `으로`, and the particles
+    # that follow a runtime substitution token, which no single form can satisfy.
+    ko, jprobs = josa.auto(ko, glossary.hard().values())
+    problems += jprobs
     ko, wprobs = wrap.fits(en, ko, kind, group)
     problems += wprobs
     if not HANGUL_RE.search(re.sub(TAG_RE, '', ko)):

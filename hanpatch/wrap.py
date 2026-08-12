@@ -216,6 +216,114 @@ def tokenize(s):
     return out
 
 
+def atoms(s):
+    """`s` as breakable pieces: ('br',) | ('sp',) | ('g', tag) | ('t', word).
+
+    A word is a run with no space in it, and a tag is its own atom because the
+    engine can substitute a value there. What must NOT happen is treating the two
+    as independent when nothing separates them - see `units`.
+    """
+    out = []
+    for kind, val in tokenize(s):
+        if kind == 'g':
+            out.append(('g', val))
+            continue
+        for piece in re.split(r'(\n| )', val):
+            if piece == '':
+                continue
+            out.append(('br',) if piece == '\n'
+                       else ('sp',) if piece == ' '
+                       else ('t', piece))
+    return out
+
+
+def units(s):
+    """Atoms grouped into the smallest pieces a line break may fall between.
+
+    Everything with no whitespace between it is ONE unit, so a substitution token
+    and the text welded to it move together. Measured on the shipped DQ7 corpus
+    before this existed: 58 rows put a runtime name at the end of a line and its
+    particle at the head of the next one - the player reads `아루스` and then a line
+    starting `에게` - and 116 rows opened a line on punctuation. Both are the same
+    defect: `rewrap` treated `{HERO}` and `에게` as two words because a tag ended one
+    token and started the next, and nothing in the gate could see it.
+    """
+    out = []
+    cur = []
+    for atom in atoms(s):
+        # A break tag ends a line by itself, so it can never be welded to the word
+        # in front of it even when no space separates them.
+        breaker = atom[0] in ('br', 'sp') or (atom[0] == 'g'
+                                             and atom[1] in HARD_BREAK | PAGE)
+        if breaker:
+            if cur:
+                out.append(cur)
+                cur = []
+            out.append([atom])
+            continue
+        cur.append(atom)
+    if cur:
+        out.append(cur)
+    return out
+
+
+# A display line may not OPEN with these. Korean typography forbids a leading
+# closing mark, and the reader has no way to tell a line that starts on `에게` or
+# `?` from a broken word. This is a property of the TARGET language, so it is not
+# a per-title declaration - every title this pipeline builds writes Korean.
+NO_LINE_START = tuple('.,!?…‥~〜:;)]}»」』〉》”’·、。！？')
+
+
+def unit_text(unit):
+    return ''.join(val for _kind, val in unit if _kind != 'br')
+
+
+def unit_width(unit):
+    w = 0
+    for kind, val in unit:
+        w += substitution_width(val) if kind == 'g' and val in SUBST_TAGS \
+            else 0 if kind == 'g' else text_width(val)
+    return w
+
+
+def overlong_units(s, budget):
+    """Units that cannot fit one line of `budget` pixels even alone.
+
+    Reported rather than split: a unit is one word, or a name welded to its
+    particle, and there is no place inside it where a break is right. Splitting it
+    anyway is what "단어 중간에서 줄이 넘어간다" means to a reader, and it used to
+    happen silently: the old character-by-character fallback emitted the break and
+    no problem.
+    """
+    return [unit_text(u) for u in units(s)
+            if u[0][0] not in ('br', 'sp') and unit_width(u) > budget]
+
+
+def prohibited_line_starts(s):
+    """Display lines that open on a character which may not open a line.
+
+    The FIRST line of a page is exempt, and deliberately: `……그런 생각을` opening a
+    record is what the script wrote, not what the wrapper did. This looks for the
+    break the wrapper chose.
+
+    Only ZERO-WIDTH tags are stripped before looking at the first character. A
+    substitution token draws a name, so a line that opens `{HERO}.` opens on the
+    name - measured while this landed: dropping every tag first reported 78 such
+    rows as broken lines, which would have sent correct text back for rewording.
+    """
+    bad = []
+    for part in (re.split('|'.join(re.escape(t) for t in PAGE), s) if PAGE
+                 else [s]):
+        for t in HARD_BREAK:
+            part = part.replace(t, '\n')
+        for line in part.split('\n')[1:]:
+            text = TAG.sub(lambda m: m.group() if m.group() in SUBST_TAGS else '',
+                           line).lstrip(' \u3000')
+            if text.startswith(NO_LINE_START):
+                bad.append(text[:12])
+    return bad
+
+
 def soften(s):
     """Turn cosmetic English line breaks into spaces.
 
@@ -230,7 +338,14 @@ def soften(s):
 
 
 def rewrap(s, budget, soft=False):
-    """Re-flow `s`, preserving every tag in order; \\n and <br> stay hard breaks."""
+    """Re-flow `s`, preserving every tag in order; \\n and <br> stay hard breaks.
+
+    Breaks fall BETWEEN units, never inside one, so a name and the particle welded
+    to it stay together and no line opens on a closing mark. A unit too wide for
+    the box is emitted whole and overflows: `overlong_units` reports it and the
+    gate refuses the row. Splitting it instead is how the old loop turned an
+    unfittable word into a break in the middle of a word with no problem raised.
+    """
     if soft:
         s = soften(s)
     out = []
@@ -239,59 +354,39 @@ def rewrap(s, budget, soft=False):
 
     def newline():
         nonlocal cur, started
+        while out and out[-1] == ' ':
+            out.pop()
         out.append('\n')
         cur = 0
         started = False
 
-    for kind, val in tokenize(s):
-        if kind == 'g':
-            if val in SUBST_TAGS:
-                w = substitution_width(val)
-                if cur > 0 and cur + w > budget:
-                    newline()
-                out.append(val)
-                cur += w
-                # A runtime substitution renders glyphs, so the space after it is
-                # real text rather than leading indentation.
-                started = True
-            else:
-                out.append(val)
-                if val in HARD_BREAK or val in PAGE:
-                    cur = 0
-                    started = False
+    for unit in units(s):
+        kind = unit[0][0]
+        if kind == 'br':
+            newline()
             continue
-        # plain text: split keeping separators
-        for piece in re.split(r'(\n| )', val):
-            if piece == '':
-                continue
-            if piece == '\n':
-                newline()
-                continue
-            if piece == ' ':
-                if started:
-                    w = char_width(' ')
-                    if cur + w <= budget:
-                        out.append(' ')
-                        cur += w
-                continue
-            w = sum(char_width(c) for c in piece)
-            if cur > 0 and cur + w > budget:
-                # drop a trailing space we may have just emitted
-                while out and out[-1] == ' ':
-                    out.pop()
-                newline()
-            if w > budget:
-                for c in piece:
-                    cw = char_width(c)
-                    if cur + cw > budget:
-                        newline()
-                    out.append(c)
-                    cur += cw
-                    started = True
-                continue
-            out.append(piece)
-            cur += w
-            started = True
+        if kind == 'sp':
+            if started:
+                w = char_width(' ')
+                if cur + w <= budget:
+                    out.append(' ')
+                    cur += w
+            continue
+        if kind == 'g' and unit[0][1] in HARD_BREAK | PAGE:
+            out.append(unit[0][1])
+            if unit[0][1] in HARD_BREAK or unit[0][1] in PAGE:
+                cur = 0
+                started = False
+            continue
+        w = unit_width(unit)
+        if cur > 0 and cur + w > budget:
+            newline()
+        out.append(unit_text(unit))
+        cur += w
+        # A control tag renders nothing, so a unit made only of control tags must
+        # not make a following space count as content.
+        started = started or bool(unit_width(unit)) or any(
+            k == 't' for k, _v in unit)
     txt = ''.join(out)
     txt = re.sub(r' +\n', '\n', txt)
     return txt
@@ -523,6 +618,17 @@ def fits(en, ko, kind, group=None):
     src = rewrap(en, budget)
     p_new, p_src = pages(new), pages(src)
     probs = []
+    # Two reader-visible line defects the wrapper can no longer cause but the
+    # WORDING still can: a word wider than the box, and a line the script's own
+    # structural break opens on a closing mark. Both are refused rather than
+    # rendered, because there is no correct place to put either.
+    for word in overlong_units(new, budget)[:1]:
+        probs.append(f'"{word}" is {unit_width(units(word)[0]):.0f}px and the box '
+                     f'holds {budget}px on one line, so it would have to break '
+                     f'inside the word (shorten it)')
+    for head in prohibited_line_starts(new)[:1]:
+        probs.append(f'a display line would open on "{head}", which may not start '
+                     f'a Korean line (move it up or reword)')
     if len(p_new) != len(p_src):
         probs.append(f'page count {len(p_new)} != {len(p_src)}')
     else:

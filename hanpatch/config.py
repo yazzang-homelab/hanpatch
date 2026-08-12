@@ -36,7 +36,8 @@ _RESIDUAL_MODES = ('off', 'kana+kanji')
 # list. A wrongly shaped value is not a style question: `dict.update` no-ops on a
 # list, so `"terms": []` silently empties the glossary the title declared.
 _OBJECT_KEYS = (
-    'font_ttf', 'font_sheet', 'font_shade','terms', 'register', 'budget', 'capacity', 'gate_thresholds')
+    'font_ttf', 'font_sheet', 'font_shade','terms', 'register', 'budget', 'capacity',
+    'gate_thresholds', 'substitution_values')
 _LIST_KEYS = ('models', 'name_keys', 'ui_only_families', 'ui_only_terms', 'hard_families',
               'hard_terms', 'kanji_allowlist', 'hard_break', 'page_break',
               'movable_tags', 'control_tags', 'literal_delimiters', 'font_src', 'font_out')
@@ -256,6 +257,16 @@ DEFAULT_PROFILE = {
     # Needed because promotion cannot be inferred from orthography: CJK is
     # caseless, so a kana/kanji term is never `isupper()`.
     'hard_terms': [],
+    # Substitution tokens whose rendered text is FIXED - a party member whose
+    # Korean name the player cannot change, e.g. {'{KEAFA}': '키파'}. This is the
+    # only fact that lets a Korean particle after the token be resolved to one
+    # form; every other substitution takes a value that is unknown until the
+    # engine draws the line, and `josa` writes the both-forms particle there.
+    # Deliberately separate from `placeholder_text`, which holds ONE example
+    # rendering for the script book's search and legitimately names a hero the
+    # player will rename. Empty means every substitution is treated as variable,
+    # which is correct but reads worse - it is never treated as "guess".
+    'substitution_values': {},
     # source language of the extracted rows. `en` keeps every Latin-source
     # heuristic exactly as it was; `ja` switches the ones that are wrong for a
     # spaceless script. Nothing else in the pipeline may branch on the title.
@@ -346,6 +357,14 @@ def validate_profile(data):
         if key in data and not isinstance(data[key], dict):
             raise SystemExit(f'{key} must be a JSON object, got '
                              f'{type(data[key]).__name__}')
+    # A fixed rendering for a token the extractor never produces is a typo that
+    # silently resolves nothing: the josa pass would keep writing the both-forms
+    # particle after the real token and the declaration would look honoured.
+    unknown = sorted(set(data.get('substitution_values', ()))
+                     - set(data.get('movable_tags', ())))
+    if unknown:
+        raise SystemExit(f'substitution_values names tokens that are not declared '
+                         f'movable_tags: {unknown}')
     for key in _LIST_KEYS:
         if key in data and not isinstance(data[key], list):
             raise SystemExit(f'{key} must be a JSON list, got '
