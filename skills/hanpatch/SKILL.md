@@ -387,6 +387,25 @@ position-dependent, so one shifted byte kills every downstream match — both
 xdelta3 and a block differ come out at ~82% of the full ROM, which is not a patch,
 it is the game.
 
+Publish the bundle to an **update channel** so a fix reaches the people already
+running the old text:
+
+```bash
+hanpatch publish dist/MyPatch.hpk --root /srv/hpk \
+    --url-base https://krpatch.duckdns.org/hpk/   # writes index.json, a page, hpk-update.py
+hanpatch update --dir ~/patches                    # the receiving side
+hanpatch update --check                            # exit 10 when an update waits
+```
+
+The channel is a static directory: `index.json` is derived from the per-release
+sidecars, so it can be rebuilt from what is served, and a published version is
+never rewritten — republishing identical bytes is a no-op and different bytes
+under a used version name are refused. The client verifies the announced size and
+SHA-256 and deletes anything that does not match, which is what makes the
+standalone `hpk-update.py` safe to hand to a stranger. Do not answer "is there a
+newer patch" with a service that must be operated and authenticated; the answer
+is a file.
+
 ## Legal
 
 **The operator decides what is lawful for them. Do not make that call for them,

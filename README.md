@@ -256,6 +256,32 @@ ROM을 4초 만에 원작자와 동일한 sha256으로 재구성한다.
 밀려도 이후 모든 매치가 파괴된다. 두 백엔드 모두 레퍼런스 타이틀에서 전체 ROM의 약 82% 크기가
 나온다. 번들을 쓸 것.
 
+### 업데이트 채널
+
+손으로 복사된 파일은 썩는다. 3월에 받아 간 사람은 3월 텍스트의 오역이 고쳐졌다는 사실을
+알 방법이 없다. `hanpatch publish`는 번들을 정적 디렉터리에 발표하고, 받는 쪽은
+`hanpatch update`나 의존성 없는 `hpk-update.py` 한 파일로 갱신을 가져간다.
+
+```bash
+# 배포하는 쪽 — 서버가 아니라 디렉터리다
+hanpatch publish "dist/MyPatch.hpk" --root /srv/hpk \
+    --url-base https://krpatch.duckdns.org/hpk/
+
+# 받는 쪽
+hanpatch update --dir ~/patches       # 바뀐 것만 받는다
+hanpatch update --check               # 받지 않고 확인만, 갱신이 있으면 종료 코드 10
+python3 hpk-update.py --dir ~/patches # hanpatch 설치 없이도 같은 일
+```
+
+`index.json`은 발표된 사이드카 파일들로부터 **파생된다** — 잃을 데이터베이스가 없고,
+서빙하는 디렉터리만으로 재생성된다. 번들은 버전이 박힌 이름으로만 발표되고 덮어쓰기는
+거부되므로(`immutable`), 미러는 멍청한 복사로 충분하다. 클라이언트는 채널을 "무엇이
+있는지"에 대해서만 신뢰한다. 모든 다운로드는 발표된 크기와 SHA-256으로 검증하며,
+어긋난 파일은 설치하지 않고 지운다. 그래서 업데이트 도구는 터미널에 붙여 넣는 스크립트
+한 개일 수 있다.
+
+레퍼런스 채널: <https://krpatch.duckdns.org/hpk/>
+
 ## 법적 사항
 
 **무엇이 합법인지는 당신이 판단한다. 이 프로젝트가 대신 판단해주지 않는다.**

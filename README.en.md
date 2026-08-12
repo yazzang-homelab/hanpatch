@@ -174,6 +174,35 @@ it is the wrong tool: the keystream is position-dependent, so one shifted byte
 destroys every downstream match. Both backends measure ~82% of the full ROM on
 the reference title. Use the bundle.
 
+### The update channel
+
+A file copied by hand rots: whoever downloaded it in March cannot learn that the
+March text mistranslated a boss name. `hanpatch publish` puts a bundle in a
+static directory; the recipient pulls changes with `hanpatch update` or with the
+dependency-free `hpk-update.py`.
+
+```bash
+# publishing side — a directory, not a service
+hanpatch publish "dist/MyPatch.hpk" --root /srv/hpk \
+    --url-base https://krpatch.duckdns.org/hpk/
+
+# receiving side
+hanpatch update --dir ~/patches       # fetch what changed
+hanpatch update --check               # report only; exit 10 if something changed
+python3 hpk-update.py --dir ~/patches # the same, without installing hanpatch
+```
+
+`index.json` is *derived* from the published sidecar files, so the channel has no
+database to lose and can be rebuilt from the directory it serves. Bundles are
+published under version-stamped names and overwriting one is refused, so a web
+server may mark them immutable and a mirror can be a dumb copy. The client
+trusts the channel for *what exists* and nothing else: every download is checked
+against the announced size and SHA-256, and a bundle that fails is deleted
+instead of installed. That is why the updater can be a script you paste into a
+terminal.
+
+Reference channel: <https://krpatch.duckdns.org/hpk/>
+
 ## Legal
 
 **You decide what you may lawfully do; this project does not decide it for you.**

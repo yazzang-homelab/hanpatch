@@ -208,6 +208,36 @@ def cmd_apply(args):
     return 0 if r['reproduced'] or args.force else 1
 
 
+def cmd_publish(args):
+    from hanpatch import channel
+    rec = channel.publish(args.bundle, args.root, url_base=args.url_base,
+                          version=args.version, notes=args.notes)
+    verb = 'already published' if rec.pop('republished') else 'published'
+    _p(f"{verb}: {rec['id']} {rec['version']}  {rec['size']} bytes")
+    _p(f"  {os.path.join(args.root, rec['file'])}")
+    _p(f"  sha256 {rec['sha256']}")
+    base = (args.url_base or '').rstrip('/')
+    if base:
+        _p(f"  {base}/{rec['file']}")
+        _p(f"  index {base}/index.json   client {base}/hpk-update.py")
+    return 0
+
+
+def channel_default():
+    from hanpatch import channel
+    return channel.DEFAULT_CHANNEL
+
+
+def cmd_update(args):
+    from hanpatch import channel
+    dest = args.dir or channel.default_dest()
+    rep = channel.update(args.channel, dest, ids=args.id or None,
+                         check_only=args.check, quiet=args.quiet)
+    if args.check and rep['pending']:
+        return 10
+    return 0
+
+
 def cmd_delta(args):
     from hanpatch import delta
     if args.apply:
@@ -328,6 +358,25 @@ def main(argv=None):
                    help='continue when the input hash does not match')
     s.add_argument('--info', action='store_true', help='print bundle metadata')
     s.set_defaults(fn=cmd_apply)
+
+    s = sub.add_parser('publish', help='put a bundle in the update channel')
+    s.add_argument('bundle')
+    s.add_argument('--root', required=True,
+                   help='the directory the channel is served from')
+    s.add_argument('--url-base', default=channel_default(),
+                   help='public URL of that directory, recorded in the index')
+    s.add_argument('--version', help='default: today, deduplicated')
+    s.add_argument('--notes', help='override the note carried in the bundle')
+    s.set_defaults(fn=cmd_publish)
+
+    s = sub.add_parser('update', help='fetch published bundles, verified')
+    s.add_argument('id', nargs='*', help='patch ids (default: every patch)')
+    s.add_argument('--channel', default=channel_default())
+    s.add_argument('--dir', help='where to keep bundles (default: dist/)')
+    s.add_argument('--check', action='store_true',
+                   help='report only; exit 10 when an update is waiting')
+    s.add_argument('--quiet', action='store_true')
+    s.set_defaults(fn=cmd_update)
 
     s = sub.add_parser('delta', help='raw binary delta between two files')
     s.add_argument('--old', required=True)
