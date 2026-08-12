@@ -24,6 +24,7 @@ import os
 import sys
 
 from hanpatch import config
+from hanpatch import star
 
 
 def _p(*a, **kw):
@@ -347,7 +348,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.project:
         config.set_root(args.project)
-    return args.fn(args)
+    rc = args.fn(args)
+    # AFTER the command, and never able to change its exit code: the ask is worth
+    # a couple of seconds of a human's attention, not one byte of a build's
+    # result. `star.nudge` swallows its own failures for the same reason.
+    star.nudge(argv=command)
+    return rc
 
 
 if __name__ == '__main__':

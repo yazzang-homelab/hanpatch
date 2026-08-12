@@ -8,6 +8,16 @@
 
 English: [README.en.md](README.en.md)
 
+## 별 하나
+
+이 도구는 무료이고 후원도 없다. 받는 값은 GitHub 별 하나뿐이다:
+<https://github.com/yazzang-homelab/hanpatch>
+
+설치 후 처음 실행하면 CLI가 한 번 물어보고, 대답하지 않으면 5회 실행마다 다시 묻는다.
+누른 것을 확인할 방법이 없으니 `s`(이미 눌렀음)는 말 그대로 믿고 기록만 남긴다.
+조용히 쓰려면 `HANPATCH_NO_STAR=1`, CI·파이프·크론에서는 애초에 묻지 않고 한 줄만 남긴다.
+어떤 경우에도 빌드를 막지 않고 종료 코드를 바꾸지 않는다.
+
 ```bash
 pip install -e .
 hanpatch init --title "My Game" --adapter my_game --profile profiles/my_game.json

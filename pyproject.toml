@@ -11,6 +11,13 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = ["pycryptodome>=3.15", "pillow>=9.0"]
 
+# Shown by `pip show hanpatch` and on the package page, so the ask exists even
+# for someone who never runs the CLI interactively.
+[project.urls]
+Homepage = "https://github.com/yazzang-homelab/hanpatch"
+Source = "https://github.com/yazzang-homelab/hanpatch"
+"Star this repo" = "https://github.com/yazzang-homelab/hanpatch"
+
 [project.scripts]
 hanpatch = "hanpatch.cli:main"
 
