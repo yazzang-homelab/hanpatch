@@ -67,11 +67,23 @@ async function main() {
       else if (m.type === 'failed') rej(new Error(m.error));
     };
   });
-  worker.postMessage({cmd: 'run', rom, keys, profile: q.get('profile') === '1',
+  worker.postMessage({cmd: 'run', rom, keys, mode: q.get('mode') || 'rom',
+                      profile: q.get('profile') === '1',
                       bundleBytes: new Uint8Array(await bundle.arrayBuffer())});
   const report = await done;
   Object.assign(result, report);
 
+  if (report.layeredfs) {
+    // 실기용 팩은 zip 이다. 안에 무엇이 들어 있는지로 확인한다.
+    result.zipSize = report.size;
+    result.packFiles = report.files.length;
+    result.titleId = report.title_id;
+    result.ipsBytes = report.ips;
+    out.textContent = lines.join('\n') + '\n\n'
+        + JSON.stringify(result, null, 1);
+    document.title = 'done';
+    return;
+  }
   // 워커가 말한 해시를 믿지 않고, OPFS 에 실제로 놓인 바이트를 다시 잰다.
   const root = await navigator.storage.getDirectory();
   async function tree(dir, prefix, depth) {

@@ -203,6 +203,25 @@ terminal.
 
 Reference channel: <https://krpatch.duckdns.org/hpk/>
 
+### LayeredFS for real hardware
+
+A cartridge cannot be rewritten, and a rebuilt NCSD rewrites the header fields its
+own signature covers, so a retail console refuses it. Luma3DS solves it from the
+other side: with game patching enabled it redirects RomFS reads to the SD card and
+applies `code.ips` to the decompressed executable. The cart stays as it is.
+
+```bash
+hanpatch luma MyPatch.hpk --rom /path/to/their.3ds --out /media/SDCARD \
+    --verify-rom rebuilt.3ds      # check every packed file against the ROM
+```
+
+Measured on DQ7: 379 RomFS files, 39.5 MB (MESS 343, LAYOUT 8, MENULIST 22,
+TEXT 6), `code.ips` 70 bytes, title id `0004000000065E00` — 40 MB instead of 2 GB.
+`--verify-rom` confirmed all 379 are byte-identical to the same paths inside the
+rebuilt ROM (0 differ, 0 missing). The pack contains game data, so it is not
+distributed: each player generates it from their own ROM, in the browser tool or
+on the command line.
+
 ### Applying it in a browser
 
 `web/apply` is the same pipeline, in wasm. Drag a ROM in, get the patched file

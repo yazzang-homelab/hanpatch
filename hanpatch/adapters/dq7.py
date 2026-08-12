@@ -319,7 +319,15 @@ class DragonQuest7(adapter.Adapter):
             raise SystemExit('INJECT BLOCKED: DQ7 .code BLZ round-trip mismatch')
         return compressed
 
-    def inject(self, entries, rom, out):
+    def stage(self, entries):
+        """Everything the patch changes, as files on disk.
+
+        Split out of `inject` because a rebuilt container is not the only useful
+        shape. On real hardware Luma3DS reads loose files off the SD card, so the
+        same staged tree and the same ExeFS patch are what a LayeredFS pack needs
+        — and the moment those two shapes are computed by two code paths, one of
+        them starts shipping different bytes.
+        """
         adapter.require(self.romfs_dir, 'extracted RomFS (run extract first)')
         stage = self._stage_romfs()
 
@@ -397,6 +405,13 @@ class DragonQuest7(adapter.Adapter):
 
         self._apply_fonts(stage)
         self._apply_assets(stage)
+        return {'romfs': stage, 'exefs': self._exefs_replacements(),
+                'rewritten': list(getattr(self, 'font_archives_written', [])),
+                'stats': stats}
+
+    def inject(self, entries, rom, out):
+        staged = self.stage(entries)
+        stage, stats = staged['romfs'], staged['stats']
 
         image = config.p('build', 'romfs.bin')
         # Reproduce the cartridge's own entry order, captured from its own image.
@@ -415,7 +430,7 @@ class DragonQuest7(adapter.Adapter):
         # release that ships one is unplayable no matter how good the text is.
         threeds.rebuild(
             rom, image, out, keystore=self._keystore(),
-            exefs_replacements=self._exefs_replacements(),
+            exefs_replacements=staged['exefs'],
             decrypt=bool(config.prof('decrypt_output')))
         stats['size'] = os.path.getsize(out)
         stats['container'] = threeds.detect(out)
@@ -556,6 +571,7 @@ class DragonQuest7(adapter.Adapter):
                 f'INJECT BLOCKED: built fonts {missing} are in no archive on this '
                 f'cartridge; the profile names a font the ROM does not ship')
         written = 0
+        touched = set()
         for name, data in sorted(built.items()):
             for arc, member in slots[name]:
                 dst = self._materialize(stage, LAYOUT_DIR, arc)
@@ -564,12 +580,17 @@ class DragonQuest7(adapter.Adapter):
                 with open(dst, 'wb') as fh:
                     fh.write(darc.replace(blob, member, data, where=dst))
                 written += 1
+                # _materialize keeps this write inside the stage, but a LayeredFS
+                # pack is built from the DECLARED rewrite set, not from a tree
+                # diff — report what was rewritten instead of inferring it.
+                touched.add(f'{LAYOUT_DIR}/{arc}')
         untouched = sorted(set(slots) - set(built))
         if untouched:
             print(f'fonts: {written} slots written; {len(untouched)} shipped fonts '
                   f'left untouched ({untouched})')
         else:
             print(f'fonts: {written} slots written across {len(built)} fonts')
+        self.font_archives_written = sorted(touched)
         return written
 
     # -- verify -------------------------------------------------------------

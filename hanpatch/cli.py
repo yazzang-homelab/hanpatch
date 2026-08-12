@@ -208,6 +208,26 @@ def cmd_apply(args):
     return 0 if r['reproduced'] or args.force else 1
 
 
+def cmd_luma(args):
+    from hanpatch import release
+    r = release.luma(args.bundle, args.rom, out=args.out, force=args.force,
+                     workdir=args.workdir)
+    if args.verify_rom:
+        from hanpatch.platforms.threeds import luma as luma_mod
+        from hanpatch.platforms import threeds
+        import tempfile
+        tmp = os.path.join(tempfile.mkdtemp(prefix='hanpatch-luma-verify-'),
+                           'romfs.bin')
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        _p(f'reading RomFS out of {args.verify_rom} …')
+        threeds.dump_romfs(args.verify_rom, tmp)
+        v = luma_mod.verify_against_rom(r['root'], tmp)
+        _p(f"  compared {v['checked']} files against the built ROM: "
+           f"{v['mismatched']} differ, {len(v['missing'])} not found")
+        return 0 if not v['mismatched'] and not v['missing'] else 1
+    return 0
+
+
 def cmd_publish(args):
     from hanpatch import channel
     rec = channel.publish(args.bundle, args.root, url_base=args.url_base,
@@ -358,6 +378,17 @@ def main(argv=None):
                    help='continue when the input hash does not match')
     s.add_argument('--info', action='store_true', help='print bundle metadata')
     s.set_defaults(fn=cmd_apply)
+
+    s = sub.add_parser('luma', help='LayeredFS pack for Luma3DS on real hardware')
+    s.add_argument('bundle')
+    s.add_argument('--rom', required=True)
+    s.add_argument('--out', help='SD card root (default: beside the ROM)')
+    s.add_argument('--force', action='store_true',
+                   help='continue when the input hash does not match')
+    s.add_argument('--workdir', help='keep the working tree here')
+    s.add_argument('--verify-rom',
+                   help='a rebuilt ROM to check every packed file against')
+    s.set_defaults(fn=cmd_luma)
 
     s = sub.add_parser('publish', help='put a bundle in the update channel')
     s.add_argument('bundle')

@@ -216,13 +216,15 @@ $('start').addEventListener('click', async () => {
       };
       worker.addEventListener('message', onMsg);
       worker.postMessage({cmd: 'run', rom: state.rom, keys: state.keys,
-                          bundleBytes, force: $('force').checked});
+                          bundleBytes, force: $('force').checked,
+                          mode: $('mode-luma').checked ? 'luma' : 'rom'});
     });
     $('bar-fill').style.width = '100%';
     await showResult(report);
   } catch (e) {
     $('result').hidden = false;
-    $('result').innerHTML = '<p class="bad">실패: '
+    const extra = await diagnose(e);
+    $('result').innerHTML = extra + '<p class="bad">실패: '
         + String(e.message).replace(/[<>&]/g, '') + '</p>'
         + '<p class="muted">기록을 펼쳐 마지막 줄을 보세요. 입력 해시 불일치는 '
         + '덤프가 다른 판본이라는 뜻이고, 키 오류는 키 파일이 없거나 다른 '
@@ -234,6 +236,78 @@ $('start').addEventListener('click', async () => {
     refreshPlan();
   }
 });
+
+// 실기용 결과는 해시로 대조할 상대가 없다(롬을 만들지 않았으니까). 대신 무엇이
+// 들어갔는지와 켜야 할 설정을 말해 준다.
+async function showLumaResult(r) {
+  const box = $('result');
+  box.innerHTML = `
+    <h3>완료 — 실기용 LayeredFS 팩</h3>
+    <table>
+      <tr><th>대상</th><td>${r.title} (${r.target}) · 타이틀 ID
+        <span class="mono">${r.title_id}</span></td></tr>
+      <tr><th>내용</th><td>RomFS 교체 파일 ${r.files.length}개
+        · 실행 코드 패치 code.ips ${r.ips} 바이트</td></tr>
+      <tr><th>압축 파일</th><td>${human(r.size)}</td></tr>
+      <tr><th>걸린 시간</th><td>${r.seconds}초</td></tr>
+    </table>
+    <p><button id="save">압축 파일 저장</button>
+       <button id="wipe" class="plain">임시 파일 지우기</button></p>
+    <ol class="muted">
+      <li>압축을 SD 카드 <strong>루트</strong>에 풀어
+        <span class="mono">SD:/luma/titles/${r.title_id}/</span> 가 되게 합니다.</li>
+      <li>SELECT 을 누른 채로 켜서 Luma 설정에 들어가 <strong>Enable game
+        patching</strong> 을 켜고 START 로 저장합니다.</li>
+      <li>재부팅하고 게임을 실행합니다.</li>
+    </ol>
+    <p class="muted">이 팩의 RomFS 파일들은 재빌드한 ROM 안의 같은 경로와 바이트
+    단위로 같은 것으로 확인된 것입니다. 다만 실기에서의 최종 동작은 님의 콘솔에서
+    확인하셔야 합니다.</p>`;
+  wireSaveWipe(r, `${r.title} (${r.target}) LayeredFS.zip`);
+}
+
+function wireSaveWipe(r, suggested) {
+  $('save').addEventListener('click', async () => {
+    const {handle} = await opfsFile(r.opfsPath);
+    const file = await handle.getFile();
+    if (window.showSaveFilePicker) {
+      const dest = await window.showSaveFilePicker({suggestedName: suggested});
+      const w = await dest.createWritable();
+      await file.stream().pipeTo(w);
+      log(`저장했습니다: ${suggested}`);
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = suggested;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    }
+  });
+  $('wipe').addEventListener('click', () => {
+    worker.postMessage({cmd: 'cleanup'});
+    log('임시 파일을 지웠습니다.');
+  });
+}
+
+// 실패가 "모듈을 못 받았다" 류일 때 추측을 남기지 않는다. 그 URL 을 캐시를 무시하고
+// 다시 받아 상태와 MIME 을 그대로 보여 준다. 한 번은 서버가 .mjs 를 octet-stream 으로
+// 줘서 이 실패가 났고, 그때 브라우저는 요청조차 하지 않아 서버 로그에 흔적이 없었다.
+async function diagnose(err) {
+  const m = /(https?:\/\/\S+?\.(?:mjs|js|wasm|whl))/.exec(String(err.message));
+  if (!m) return '';
+  try {
+    const r = await fetch(m[1], {cache: 'reload'});
+    const ct = r.headers.get('content-type') || '(없음)';
+    const okType = /javascript|ecmascript/.test(ct) || !/\.(mjs|js)$/.test(m[1]);
+    return `<p class="muted">진단: <span class="mono">${m[1]}</span> →
+      HTTP ${r.status}, Content-Type <code>${ct}</code>` +
+      (okType ? ' (정상)' : ' — 이 타입으로는 모듈을 실행할 수 없습니다.') +
+      '</p><p class="bad">브라우저에 옛 응답이 캐시된 경우입니다. '
+      + 'Ctrl+Shift+R(맥은 Cmd+Shift+R)로 강제 새로고침하세요.</p>';
+  } catch (e2) {
+    return `<p class="muted">진단: ${m[1]} 을 다시 받지도 못했습니다 (${e2}).</p>`;
+  }
+}
 
 async function opfsFile(path) {
   const parts = path.split('/');
@@ -247,6 +321,7 @@ async function showResult(r) {
   const box = $('result');
   box.hidden = false;
   const ok = r.reproduced;
+  if (r.layeredfs) return showLumaResult(r);
   box.innerHTML = `
     <h3>${ok ? '완료 — 제작자 빌드와 같은 결과입니다'
              : '완료 — 다만 제작자 빌드와 다릅니다'}</h3>
@@ -266,28 +341,15 @@ async function showResult(r) {
         + '경우입니다. 쓰기 전에 확인하세요.</p>');
   }
 
-  $('save').addEventListener('click', async () => {
-    const {handle} = await opfsFile(r.opfsPath);
-    const file = await handle.getFile();
-    const suggested = `${r.title} (${r.target})`
-        + r.out.slice(r.out.lastIndexOf('.'));
-    if (window.showSaveFilePicker) {
-      const dest = await window.showSaveFilePicker({suggestedName: suggested});
-      const w = await dest.createWritable();
-      // 스트리밍 복사. 2GB 를 램에 올리지 않는다.
-      await file.stream().pipeTo(w);
-      log(`저장했습니다: ${suggested}`);
-    } else {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(file);
-      a.download = suggested;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    }
-  });
-  $('wipe').addEventListener('click', () => {
-    worker.postMessage({cmd: 'cleanup'});
-    log('임시 파일을 지웠습니다.');
+  // 저장은 스트리밍 복사다. 2GB 를 램에 올리지 않는다.
+  wireSaveWipe(r, `${r.title} (${r.target})`
+      + r.out.slice(r.out.lastIndexOf('.')));
+}
+
+for (const id of ['mode-rom', 'mode-luma']) {
+  $(id).addEventListener('change', () => {
+    $('mode-rom-label').classList.toggle('sel', $('mode-rom').checked);
+    $('mode-luma-label').classList.toggle('sel', $('mode-luma').checked);
   });
 }
 

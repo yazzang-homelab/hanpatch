@@ -125,12 +125,13 @@ def inspect(bundle):
         return json.loads(z.read('bundle.json'))
 
 
-def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
-    """Rebuild `rom` with the bundle's translation. Returns a report.
+def _open_for(bundle, rom, force, workdir, quiet, what):
+    """Unpack a bundle into a throwaway project and extract the ROM into it.
 
-    The recipient needs the game and this tool; the bundle supplies the text.
-    Nothing here trusts the bundle blindly: the input hash is checked before
-    work starts and the output hash after it finishes.
+    Shared by `apply` and `luma`: both start from the same sealed manifest and
+    the same extracted cartridge, and the only difference is what they do with
+    the staged result. Two copies of this setup would drift on the day one of
+    them learns something about the profile that the other does not.
     """
     from hanpatch import adapter
     info = inspect(bundle)
@@ -147,7 +148,7 @@ def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
         if not quiet:
             print(msg + '\n--force given; continuing, verify the result yourself')
 
-    tmp = workdir or tempfile.mkdtemp(prefix='hanpatch-apply-')
+    tmp = workdir or tempfile.mkdtemp(prefix=f'hanpatch-{what}-')
     os.makedirs(tmp, exist_ok=True)
     with zipfile.ZipFile(bundle) as z:
         z.extractall(tmp)
@@ -174,9 +175,48 @@ def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
     if not quiet:
         print(f'extracting {os.path.basename(rom)} …', flush=True)
     ad.extract(rom)
-
     doc = config.load_object(os.path.join(tmp, 'manifest.json'),
                              'the sealed manifest')
+    return info, doc, tmp, ad
+
+
+def luma(bundle, rom, out=None, force=False, workdir=None, quiet=False):
+    """Write a Luma3DS LayeredFS pack instead of a rebuilt image.
+
+    For a cartridge this is the only shape that reaches real hardware: the cart
+    cannot be rewritten and a rebuilt NCSD no longer matches its own signature,
+    so a retail console refuses it. Luma reads the changed files off the SD card
+    instead, which is also a few hundred megabytes rather than two gigabytes.
+    """
+    from hanpatch.platforms.threeds import luma as luma_mod
+    info, doc, tmp, ad = _open_for(bundle, rom, force, workdir, quiet, 'luma')
+    out = out or os.path.join(os.path.dirname(os.path.abspath(rom)),
+                              f"{info['title']} ({info['target']}) LayeredFS")
+    os.makedirs(out, exist_ok=True)
+    if not quiet:
+        print(f'staging {len(doc["entries"])} strings '
+              f'(digest {doc["digest"][:16]}) …', flush=True)
+    rep = luma_mod.pack(ad, doc['entries'], out, rom=rom, quiet=quiet)
+    rep['out'] = out
+    rep['title'] = info['title']
+    rep['target'] = info['target']
+    if not quiet:
+        print(f"{rep['root']}\n  RomFS {len(rep['files'])} files, "
+              f"{rep['bytes'] / 1e6:.1f} MB\n  code.ips {rep['ips']} bytes\n"
+              f"  title id {rep['title_id']}")
+    if workdir is None:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return rep
+
+
+def apply(bundle, rom, out=None, force=False, workdir=None, quiet=False):
+    """Rebuild `rom` with the bundle's translation. Returns a report.
+
+    The recipient needs the game and this tool; the bundle supplies the text.
+    Nothing here trusts the bundle blindly: the input hash is checked before
+    work starts and the output hash after it finishes.
+    """
+    info, doc, tmp, ad = _open_for(bundle, rom, force, workdir, quiet, 'apply')
     if not quiet:
         print(f'injecting {len(doc["entries"])} strings '
               f'(digest {doc["digest"][:16]}) …', flush=True)

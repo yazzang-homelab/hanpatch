@@ -282,6 +282,29 @@ python3 hpk-update.py --dir ~/patches # hanpatch 설치 없이도 같은 일
 
 레퍼런스 채널: <https://krpatch.duckdns.org/hpk/>
 
+### 실기(Luma3DS) LayeredFS
+
+카트리지는 다시 쓸 수 없고, 재빌드한 NCSD는 자기 서명이 덮는 헤더를 다시 쓰므로
+소매 상태 콘솔이 거부한다. 실기로 가는 길은 반대쪽이다 — Luma3DS의 game patching이
+RomFS 읽기를 SD 카드로 돌리고, 실행 코드는 `code.ips`로 고친다. 카트는 그대로 두고
+바뀐 것만 SD에 올린다.
+
+```bash
+hanpatch luma MyPatch.hpk --rom /경로/내ROM.3ds --out /media/SDCARD \
+    --verify-rom "재빌드한 ROM.3ds"     # 팩의 모든 파일을 ROM 안 RomFS와 대조
+```
+
+DQ7 실측: RomFS 교체 379개 파일 39.5 MB(MESS 343 · LAYOUT 8 · MENULIST 22 ·
+TEXT 6), `code.ips` 70바이트, 타이틀 ID `0004000000065E00`. 2GB 대신 40MB다.
+`--verify-rom` 으로 **379개 전부가 재빌드된 ROM 안의 같은 경로와 바이트 단위로
+동일**함을 확인했다(0 differ, 0 missing). 팩은 게임 데이터를 포함하므로 배포하지
+않는다 — 각자 자기 ROM에서 만든다(브라우저 도구에도 같은 모드가 있다).
+
+`code.ips`는 압축을 푼 실행 코드에 대한 패치다(Luma가 그 시점에 적용한다).
+생성한 IPS를 원본에 적용해 검토된 패치 바이트와 같은지 확인한 뒤에야 파일로 쓴다.
+IPS 오프셋은 3바이트라 16MB를 넘는 코드는 거부한다 — 조용히 잘라내면 부팅은 되고
+동작이 이상한 콘솔이 나온다.
+
 ### 브라우저에서 적용하기
 
 아무것도 설치하지 않고 ROM을 끌어다 놓는 쪽이 필요하면 `web/apply`가 그것이다.
@@ -302,6 +325,9 @@ node web/run_headless.mjs "http://127.0.0.1:8123/selftest/engine.html?rom=…&bu
 |---|---|---|---|
 | 레퍼런스 타이틀 249 MB CIA | 9.7초 | 66–80초 | 해시 동일 |
 | DQ7 2.0 GB 3DS | 2분 14초 | 8분 6초 | 해시 동일 |
+
+실기용 팩도 브라우저에서 만든다(같은 페이지의 "실기용 Luma3DS LayeredFS 팩").
+컨테이너를 다시 만들지 않으므로 재빌드보다 빠르고 임시 공간도 적게 쓴다.
 
 업로드는 없다. 파일은 워커로만 전달되고, 임시 파일은 브라우저의 OPFS(디스크)에
 쓰인다 — DQ7 한 번에 6.3 GB. 브라우저에서 이걸 성립시키는 데 세 가지가 필요했다.

@@ -51,7 +51,24 @@
 </section>
 
 <section class="box">
-  <h2>4. 적용</h2>
+  <h2>4. 무엇을 만들지</h2>
+  <label class="choice sel" id="mode-rom-label">
+    <input type="radio" name="mode" id="mode-rom" checked>
+    <span><strong>패치된 ROM 파일</strong> — 에뮬레이터(Azahar 등)로 하실 때.
+    입력과 같은 크기의 이미지가 나옵니다(2GB). 결과가 제작자 빌드와 바이트 단위로
+    같은지 확인해 줍니다.</span>
+  </label>
+  <label class="choice" id="mode-luma-label">
+    <input type="radio" name="mode" id="mode-luma">
+    <span><strong>실기용 Luma3DS LayeredFS 팩</strong> — 카트리지나 설치된
+    타이틀을 그대로 두고 SD 카드에 바뀐 파일만 올립니다. 압축 40 MB 내외이고,
+    2GB를 옮기지 않아도 됩니다. Luma 설정에서 <code>Enable game patching</code>을
+    켜야 합니다(압축 안에 설명이 들어 있습니다).</span>
+  </label>
+</section>
+
+<section class="box">
+  <h2>5. 적용</h2>
   <p id="plan" class="muted">위의 1·3 이 채워지면 시작할 수 있습니다.</p>
   <p>
     <button id="start" disabled>패치 적용</button>

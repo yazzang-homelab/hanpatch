@@ -22,6 +22,9 @@ import urllib.request
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(HERE, 'web', 'apply')
 PYODIDE = 'v0.26.4'
+# 배포 경로에 버전을 박는다. URL 이 캐시 키이므로, 잘못된 MIME 으로 캐시된 응답이
+# 남아 있어도 새 경로에서는 그것을 쓸 수 없다(실측 사고 2026-08-12).
+PYODIDE_DIR = 'vendor/pyodide-' + PYODIDE.lstrip('v')
 PYODIDE_FILES = (
     'pyodide.js', 'pyodide.mjs', 'pyodide.asm.js', 'pyodide.asm.wasm',
     'python_stdlib.zip', 'pyodide-lock.json',
@@ -46,7 +49,12 @@ def sha256(path):
 
 
 def build_wheel(out_dir):
-    """저장소의 현재 소스로 휠을 만든다. 브라우저가 옛 코드를 돌리면 안 된다."""
+    """저장소의 현재 소스로 휠을 만들고 내용 해시 폴더에 놓는다.
+
+    이름을 그대로 두고 길게 캐시하면, 코드를 고쳐도 브라우저는 일주일 동안 옛 휠을
+    쓴다(실측 사고: .mjs 가 같은 이유로 안 고쳐졌다). URL 이 캐시 키이므로 해시를
+    경로에 넣고, 어느 URL 을 쓸지는 매번 새로 받는 build.json 이 알려 준다.
+    """
     tmp = os.path.join(out_dir, '.build')
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp, exist_ok=True)
@@ -56,8 +64,12 @@ def build_wheel(out_dir):
     wheels = [f for f in os.listdir(tmp) if f.endswith('.whl')]
     if len(wheels) != 1:
         raise SystemExit(f'휠이 하나가 아닙니다: {wheels}')
-    dest = os.path.join(out_dir, wheels[0])
-    shutil.move(os.path.join(tmp, wheels[0]), dest)
+    built = os.path.join(tmp, wheels[0])
+    digest = sha256(built)[:12]
+    sub = os.path.join(out_dir, digest)
+    os.makedirs(sub, exist_ok=True)
+    dest = os.path.join(sub, wheels[0])
+    shutil.move(built, dest)
     shutil.rmtree(tmp, ignore_errors=True)
     return dest
 
@@ -88,14 +100,22 @@ def main():
 
     os.makedirs(a.root, exist_ok=True)
     wheels_dir = os.path.join(a.root, 'wheels')
+    shutil.rmtree(wheels_dir, ignore_errors=True)
     os.makedirs(wheels_dir, exist_ok=True)
-    for old in os.listdir(wheels_dir):
-        if old.endswith('.whl'):
-            os.remove(os.path.join(wheels_dir, old))
     wheel = build_wheel(wheels_dir)
     print(f'휠: {os.path.basename(wheel)} {os.path.getsize(wheel)} bytes')
 
-    vendor = os.path.join(a.root, 'vendor', 'pyodide')
+    vendor = os.path.join(a.root, PYODIDE_DIR)
+    stale = os.path.join(a.root, 'vendor', 'pyodide')
+    if os.path.isdir(stale) and os.path.abspath(stale) != os.path.abspath(vendor):
+        os.makedirs(vendor, exist_ok=True)
+        for name in os.listdir(stale):
+            src = os.path.join(stale, name)
+            dst = os.path.join(vendor, name)
+            if not os.path.exists(dst):
+                shutil.move(src, dst)
+        shutil.rmtree(stale, ignore_errors=True)
+        print(f'옛 vendor/pyodide 를 {PYODIDE_DIR} 로 옮겼습니다')
     if a.fetch_pyodide:
         fetch_pyodide(vendor)
     missing = [f for f in PYODIDE_FILES
@@ -123,16 +143,21 @@ def main():
     else:
         shutil.rmtree(os.path.join(a.root, 'selftest'), ignore_errors=True)
 
+    wheel_rel = os.path.relpath(wheel, a.root).replace(os.sep, '/')
+    with open(os.path.join(a.root, 'build.json'), 'w', encoding='utf-8') as f:
+        json.dump({'wheel': wheel_rel, 'pyodide': PYODIDE_DIR + '/'}, f, indent=1)
+        f.write('\n')
+
     entries = []
-    for rel in sorted(copied + [f'wheels/{os.path.basename(wheel)}']
-                      + [f'vendor/pyodide/{f}' for f in PYODIDE_FILES]):
+    for rel in sorted(copied + ['build.json', wheel_rel]
+                      + [f'{PYODIDE_DIR}/{f}' for f in PYODIDE_FILES]):
         p = os.path.join(a.root, rel)
         entries.append({'path': rel, 'size': os.path.getsize(p),
                         'sha256': sha256(p)})
     manifest = {
         'tool': 'hanpatch browser patcher',
         'pyodide': PYODIDE,
-        'wheel': os.path.basename(wheel),
+        'wheel': wheel_rel,
         'source_commit': subprocess.run(
             ['git', '-C', HERE, 'rev-parse', 'HEAD'], capture_output=True,
             text=True).stdout.strip() or None,
