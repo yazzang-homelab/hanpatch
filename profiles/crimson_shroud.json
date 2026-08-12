@@ -282,5 +282,8 @@
    15
   ]
  },
- "font_charset": "ksx1001"
+ "font_charset": "ksx1001",
+ "book_title_ko": "크림슨 슈라우드",
+ "substitution_width_default": 0,
+ "_substitution_width_default_comment": "HISTORICAL ASSUMPTION, NOT A MEASUREMENT. The shipped Crimson Shroud build was produced when every substitution tag counted as zero width, and its byte-identical output (sha256 0b8f42944f3d7ab064405b6368727b4aa6d21a671bddac3ac185a91ca3bc922a) is the contract this title is verified against, so declaring anything else would move line breaks and break that contract. It is written down here because the engine now refuses to ASSUME a width: DQ7 shipped overflowing dialogue precisely because {KEAFA} rendered 키파 and measured 0px. If Crimson is ever re-measured on a device, replace this with the measured widths and expect a new reference hash."
 }

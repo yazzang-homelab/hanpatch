@@ -544,6 +544,15 @@ class DragonQuest7(adapter.Adapter):
             for label, ok in blocks.items():
                 if not ok:
                     problems.append(f'ncch {label} superblock hash mismatch')
+        # The superblock hash covers the region the header declares - the 0x200
+        # ExeFS header here - so it says nothing about `.code`, which is exactly
+        # the member this title replaces. Verify every member against the hash its
+        # own ExeFS header carries, or a rebuild that shifted the table ships with
+        # a green verify.
+        for name, ok in threeds.exefs_member_hashes(
+                rom, keystore=self._keystore()).items():
+            if not ok:
+                problems.append(f'exefs member {name} hash mismatch')
 
         work = config.work('verify')
         os.makedirs(work, exist_ok=True)

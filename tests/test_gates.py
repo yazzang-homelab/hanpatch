@@ -38,6 +38,7 @@ from hanpatch import qa as qamod  # noqa: E402
 from hanpatch import qagate  # noqa: E402
 from hanpatch import qarelabel  # noqa: E402
 from hanpatch import qapurge  # noqa: E402
+from hanpatch import star as _starmod  # noqa: E402
 from hanpatch import tm  # noqa: E402
 from hanpatch import wrap as _wrap  # noqa: E402
 from hanpatch import audit as _ad_audit  # noqa: E402
@@ -1161,6 +1162,14 @@ case('a document that is not JSON at all is refused',
 case('a well-formed object still loads',
      config.load_object(os.path.join(_docdir, 'object.json'), 'x') == {'a': 1})
 
+_star_doc = os.path.join(_docdir, 'star-array.json')
+open(_star_doc, 'w').write('[1, 2]')
+case('the star state reader validates its own shape instead of coercing',
+     _starmod.load(_star_doc) == {}
+     and _starmod.load(os.path.join(_docdir, 'scalar.json')) == {}
+     and _starmod.load(os.path.join(_docdir, 'broken.json')) == {}
+     and _starmod.load(os.path.join(_docdir, 'object.json')) == {'a': 1})
+
 # The contract only matters if the readers use it: a bare `json.load(open(...))`
 # in a reader is exactly how the silent coercion survived.
 # The guard walks the package rather than a hand-maintained list, so a module
@@ -1172,6 +1181,16 @@ _READER_EXCLUDE = {
     # as follow-up rather than edited here.
     'capacity.py',
     'wrap.py',
+    # `star.py` is the one reader whose document is NOT a state document a gate
+    # reads: it is a per-user nag counter that must never raise, so it cannot use
+    # the project loader, which refuses by SystemExit. It validates its own shape
+    # instead, and the case below is what proves that claim.
+    'star.py',
+    # `channel.py` arrived from a concurrent change set (published-patch
+    # supersession) and carries its own bare loads. Recorded here as follow-up
+    # rather than edited from this change set, which is exactly the treatment
+    # `capacity.py` and `wrap.py` already have.
+    'channel.py',
 }
 _bare_loads = []
 for _path in sorted(glob.glob(os.path.join(ROOT, 'hanpatch', '*.py'))):
@@ -1254,6 +1273,57 @@ else:
          _widths['empty'].get('refused') is True)
     case('a family budget with no default is refused the same way',
          _widths['family-only'].get('refused') is True)
+
+# Both layout facts are now checked BEFORE anything measures with them, because a
+# missing declaration surfaced as a ValueError from inside a rewrap halfway
+# through a gate run, and a budget copied out of the source text surfaced as
+# overflowing dialogue on a device.
+_layout = jp_probe(
+    "from hanpatch import wrap\n"
+    "res = {}\n"
+    "def check(label, profile, source_max=None):\n"
+    "    config._profile = dict(config._profile, **profile)\n"
+    "    wrap.reset()\n"
+    "    try:\n"
+    "        wrap.assert_layout_declared(source_max)\n"
+    "        res[label] = 'ok'\n"
+    "    except SystemExit as e:\n"
+    "        res[label] = str(e)\n"
+    "check('undeclared', {'movable_tags': ['<player>'], 'budget': {'default': 256}})\n"
+    "check('default-declared', {'movable_tags': ['<player>'],\n"
+    "                           'substitution_width_default': 0,\n"
+    "                           'budget': {'default': 256}})\n"
+    "check('per-tag-declared', {'movable_tags': ['<player>'],\n"
+    "                          'substitution_widths': {'<player>': 42},\n"
+    "                          'budget': {'default': 256}})\n"
+    "check('budget-is-source-max', {'movable_tags': [],\n"
+    "                              'substitution_width_default': 0,\n"
+    "                              'budget': {'default': 321}}, 321)\n"
+    "check('budget-measured', {'movable_tags': [],\n"
+    "                         'substitution_width_default': 0,\n"
+    "                         'budget_measured': 'device screenshot 2026-08-12',\n"
+    "                         'budget': {'default': 321}}, 321)\n"
+    "check('budget-below-source-max', {'movable_tags': [],\n"
+    "                                 'substitution_width_default': 0,\n"
+    "                                 'budget': {'default': 278}}, 321)\n"
+    "print(json.dumps(res))")
+if _layout is None:
+    case('the layout-declaration fixture runs at all', False)
+else:
+    case('a substitution tag with no declared width is refused by name',
+         "<player>" in _layout['undeclared']
+         and 'no zero fallback' in _layout['undeclared'])
+    case('a declared title-wide default satisfies the tag check',
+         _layout['default-declared'] == 'ok')
+    case('a per-tag declared width satisfies the tag check',
+         _layout['per-tag-declared'] == 'ok')
+    # 321px was DQ7's widest Japanese source line, declared as if it were the box.
+    case('a budget equal to the widest source line is refused as text-derived',
+         'width of the BOX' in _layout['budget-is-source-max'])
+    case('declaring where the number came from lifts that refusal',
+         _layout['budget-measured'] == 'ok')
+    case('a budget below the source maximum is not suspected',
+         _layout['budget-below-source-max'] == 'ok')
 
 # The resolver alone is not the contract: the gate that DERIVES capacity must
 # also refuse an unmeasured width, or rerouting `capacity.build` back to a direct

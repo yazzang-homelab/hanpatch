@@ -692,6 +692,123 @@ case('a zero-length replacement partition is refused with a diagnostic', raises(
     'cannot be zero bytes'))
 
 print()
+print('== ExeFS rebuild: the region the superblock hash does not cover ==')
+
+
+def _plain_ncch_exefs(path, members, romfs_bytes=b'IVFC' + b'\0' * 2044,
+                      exefs_off=0x1000, exefs_units=1):
+    """A plaintext NCCH carrying a real ExeFS, so the rebuild can be measured.
+
+    `members` is [(name, bytes)]. The ExeFS header is built the way the format
+    defines it: a 0x10 entry per member at the front and its SHA-256 in the
+    reversed hash table at 0xC0.
+    """
+    header = bytearray(0x200)
+    body = bytearray()
+    offset = 0
+    for index, (name, content) in enumerate(members):
+        header[index * 0x10:index * 0x10 + 8] = name.encode('latin1').ljust(8, b'\0')
+        struct.pack_into('<II', header, index * 0x10 + 8, offset, len(content))
+        header[0xC0 + (9 - index) * 0x20:0xE0 + (9 - index) * 0x20] = (
+            hashlib.sha256(content).digest())
+        padded = content + b'\0' * (-len(content) % 0x200)
+        body += padded
+        offset += len(padded)
+    exefs = bytes(header) + bytes(body)
+    romfs_off = exefs_off + len(exefs)
+    romfs_pad = (len(romfs_bytes) + 0x1FF) // 0x200 * 0x200
+    h = bytearray(0x200)
+    h[0x100:0x104] = b'NCCH'
+    struct.pack_into('<I', h, 0x104, (romfs_off + romfs_pad) // 0x200)
+    h[0x118:0x120] = struct.pack('<Q', 0x0004000000065E00)
+    h[0x180:0x184] = struct.pack('<I', 0x400)          # exheader declared
+    flags = bytearray(8)
+    flags[7] = 0x04                                    # no crypto
+    h[0x188:0x190] = bytes(flags)
+    struct.pack_into('<II', h, 0x1A0, exefs_off // 0x200, len(exefs) // 0x200)
+    struct.pack_into('<I', h, 0x1A8, exefs_units)
+    struct.pack_into('<II', h, 0x1B0, romfs_off // 0x200, romfs_pad // 0x200)
+    struct.pack_into('<I', h, 0x1B8, 1)
+    image = bytearray(romfs_off + romfs_pad)
+    image[0:0x200] = h
+    # The exheader occupies the 0x800 REGION after the header regardless of what
+    # 0x180 declares; fill it so its hash is over real bytes.
+    image[0x200:0xA00] = bytes(range(256)) * 8
+    h[0x160:0x180] = hashlib.sha256(bytes(image[0x200:0x600])).digest()
+    h[0x1C0:0x1E0] = hashlib.sha256(exefs[:exefs_units * 0x200]).digest()
+    h[0x1E0:0x200] = hashlib.sha256(
+        (romfs_bytes + b'\0' * 0x200)[:0x200]).digest()
+    image[0:0x200] = h
+    image[exefs_off:exefs_off + len(exefs)] = exefs
+    image[romfs_off:romfs_off + len(romfs_bytes)] = romfs_bytes
+    open(path, 'wb').write(bytes(image))
+    return path
+
+
+_members = [('.code', b'CODE' * 64), ('banner', b'BANNER!!' * 16),
+            ('icon', b'ICON' * 8), ('logo', b'LOGO' * 4)]
+_exefs_src = _plain_ncch_exefs(os.path.join(TMP, 'exefs-src.ncch'), _members)
+case('the ExeFS fixture verifies against its own member hashes',
+     threedsmod.exefs_member_hashes(_exefs_src)
+     == {'.code': True, 'banner': True, 'icon': True, 'logo': True})
+_exefs_out = os.path.join(TMP, 'exefs-rebuilt.ncch')
+repack.rebuild_ncch(_exefs_src, 0, _newromfs, _exefs_out,
+                    exefs_replacements={'.code': b'PATCHED!' * 32})
+# The defect this pins: a member name shorter than its 8-byte slot used to RESIZE
+# the header bytearray, which moved every hash and every member after it while the
+# superblock hash still agreed, being computed over the same shifted buffer.
+case('a rebuilt ExeFS keeps its header exactly 0x200 bytes',
+     struct.unpack_from('<II', open(_exefs_out, 'rb').read(0x1200), 0x1000 + 8)
+     == (0, len(b'PATCHED!' * 32)))
+case('every rebuilt ExeFS member still matches its own declared hash',
+     all(threedsmod.exefs_member_hashes(_exefs_out).values()))
+case('the replaced member is the one that changed',
+     open(_exefs_out, 'rb').read()[0x1200:0x1200 + 8] == b'PATCHED!')
+case('the untouched members are byte-identical after a rebuild',
+     b'BANNER!!' in open(_exefs_out, 'rb').read()
+     and b'LOGO' in open(_exefs_out, 'rb').read())
+case('a replacement naming a member the source lacks is refused', raises(
+    lambda: repack.rebuild_ncch(_exefs_src, 0, _newromfs,
+                                os.path.join(TMP, 'exefs-unknown.ncch'),
+                                exefs_replacements={'.text': b'x'}),
+    'missing from source'))
+case('a replacement that would overflow the space before RomFS is refused', raises(
+    lambda: repack.rebuild_ncch(_exefs_src, 0, _newromfs,
+                                os.path.join(TMP, 'exefs-overflow.ncch'),
+                                exefs_replacements={'.code': b'x' * 0x100000}),
+    'overflows'))
+# A shifted hash table is invisible to the superblock hash, so the member check has
+# to be the one that sees it. Corrupt one member and prove which check reacts.
+_bad_member = os.path.join(TMP, 'exefs-bad-member.ncch')
+_bm = bytearray(open(_exefs_out, 'rb').read())
+_bm[0x1200] ^= 0xFF
+open(_bad_member, 'wb').write(bytes(_bm))
+case('a flipped byte inside a member is caught by the member hashes',
+     threedsmod.exefs_member_hashes(_bad_member)['.code'] is False)
+case('the same flip is invisible to the superblock hash, which is why both run',
+     threedsmod.superblock_hashes(_bad_member)['exefs'] is True)
+
+print()
+print('== decrypted output: what an emulator will actually boot ==')
+_dec_out = os.path.join(TMP, 'exefs-decrypted.ncch')
+repack.rebuild_ncch(_exefs_src, 0, _newromfs, _dec_out, decrypt=True)
+_dec_flags = open(_dec_out, 'rb').read(0x200)[0x188:0x190]
+case('a decrypted rebuild declares NoCrypto', bool(_dec_flags[7] & 0x04))
+case('a decrypted rebuild clears the crypto method', _dec_flags[3] == 0)
+case('a decrypted rebuild drops the fixed-key and seed bits',
+     not _dec_flags[7] & 0x01 and not _dec_flags[7] & 0x20)
+case('a decrypted rebuild still verifies its member hashes',
+     all(threedsmod.exefs_member_hashes(_dec_out).values()))
+case('a decrypted rebuild still verifies every superblock hash',
+     all(threedsmod.superblock_hashes(_dec_out).values()))
+# The exheader REGION is 0x800; this fixture declares 0x400 at 0x180 exactly as the
+# retail cartridge declares 0x3FB. Trusting the declaration wrote 10 bytes too few
+# and shifted every following section, which the member hashes above now catch.
+case('the exheader region is copied whole, so the ExeFS lands where it is declared',
+     open(_dec_out, 'rb').read(0xA00)[0x200:0xA00]
+     == open(_exefs_src, 'rb').read(0xA00)[0x200:0xA00])
+
+print()
 print('== DQ7 verify fail-closed ==')
 # content_hashes() is CIA-only and reports [] for a cartridge. The adapter is the
 # declared owner of that gap: an empty list must never read as "nothing to check,

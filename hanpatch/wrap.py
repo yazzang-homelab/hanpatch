@@ -54,6 +54,51 @@ def budget_for(kind):
     """Pixel width for a layout group, or fail closed if none was measured."""
     resolved = _budget(BUDGET)
     return resolved.get(kind, resolved['default'])
+
+
+def declared_substitution_tags():
+    """Substitution tags this title declares a rendered width for."""
+    return set(SUBST_WIDTHS)
+
+
+def assert_layout_declared(source_max_width=None):
+    """Refuse a title whose layout facts were assumed rather than declared.
+
+    Two defects shipped from the same root cause - a number nobody measured -
+    and both are cheap to refuse up front instead of discovering them on a
+    device:
+
+      * a substitution tag with no declared width. `substitution_width` fails
+        closed where the width is consumed, but that surfaces as a ValueError
+        from inside a rewrap in the middle of a gate run. Checking the profile
+        first turns it into a refusal that names the tags.
+      * a budget equal to the widest SOURCE line. That equality is the
+        signature of a budget derived from the text instead of measured from
+        the box: DQ7 declared 321px that way and 287px lines still spilled
+        outside the frame on a real screen. A title may declare
+        `budget_measured` to say where its number came from, which is exactly
+        the sentence that was missing.
+    """
+    missing = sorted(tag for tag in SUBST_TAGS if tag not in SUBST_WIDTHS)
+    if missing and SUBST_WIDTH_DEFAULT is None:
+        raise SystemExit(
+            f'these substitution tags render a runtime value and have no declared '
+            f'width: {missing}. Measure what the engine draws in their place and '
+            f'declare `substitution_widths`, or declare `substitution_width_default` '
+            f'for the whole title. There is deliberately no zero fallback - a tag '
+            f'measured as 0px is how overflowing dialogue passed the layout gate.')
+    if source_max_width is None:
+        return
+    provenance = config.prof('budget_measured')
+    equal = sorted(kind for kind, width in _budget(BUDGET).items()
+                   if width == source_max_width)
+    if equal and not provenance:
+        raise SystemExit(
+            f'budget {equal} equals the widest source line this title renders '
+            f'({source_max_width}px), which is what a budget derived from the TEXT '
+            f'looks like. A budget is the width of the BOX. Measure it - a '
+            f'screenshot and one glyph-advance ratio is enough - and record where '
+            f'the number came from in `budget_measured`.')
 # Tags that substitute a runtime value and therefore render glyphs. Every other
 # tag is a zero-width control tag: it must not keep a space alive at the start
 # of a line, while `<num1> 이상` must.

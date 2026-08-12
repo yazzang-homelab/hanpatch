@@ -242,3 +242,43 @@ def superblock_hashes(cia, keystore=None):
             f'image is intact. Refusing to return an empty result that reads as a '
             f'clean check.')
     return out
+
+
+def exefs_member_hashes(cia, keystore=None):
+    """Verify each ExeFS member against the hash its own ExeFS header carries.
+
+    The superblock hash covers only the region the NCCH header DECLARES, which on
+    this cartridge is the 0x200 ExeFS header - not `.code`, not the icon. So a
+    rebuild that wrote the members at the wrong offsets, or wrote the member
+    hashes at the wrong offsets, still produced a green `superblock_hashes`:
+    measured on DQ7 2026-08-12, an 8-byte name slot written with a 5-byte name
+    resized the header buffer, shifted the hash table by 10 bytes, and shipped.
+    This is the check that sees it, because it recomputes what the member hash is
+    supposed to be from the bytes actually in the image.
+
+    Returns {member name: bool}. An ExeFS the header declares but that carries no
+    member is a refusal, not an empty pass, for the same reason
+    `superblock_hashes` refuses to return {}.
+    """
+    n = open_ncch(cia, keystore=keystore)
+    if not struct.unpack_from('<I', n.h, 0x1A4)[0]:
+        return {}
+    header = n.exefs(0, 0x200)
+    out = {}
+    for index in range(10):
+        entry = header[index * 0x10:(index + 1) * 0x10]
+        name = entry[:8].rstrip(b'\0').decode('latin1')
+        if not name:
+            continue
+        offset, size = struct.unpack('<II', entry[8:16])
+        aligned = (size + 15) // 16 * 16
+        content = n.exefs(0x200 + offset, aligned,
+                          secondary=name not in ('icon', 'banner', 'logo'))[:size]
+        declared = header[0xC0 + (9 - index) * 0x20:0xE0 + (9 - index) * 0x20]
+        out[name] = hashlib.sha256(content).digest() == declared
+    if not out:
+        raise SystemExit(
+            f'{cia}: the NCCH declares an ExeFS but its header names no member, so '
+            f'there is nothing to verify. Refusing to return an empty result that '
+            f'reads as a clean check.')
+    return out
