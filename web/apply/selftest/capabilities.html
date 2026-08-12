@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>capability probe</title></head>
+<body><pre id="out">running…</pre>
+<script>
+// 브라우저에서 로컬 패치를 돌리기 위해 실제로 필요한 것들만 확인한다.
+// 하나라도 없으면 설계가 아니라 전제가 틀린 것이므로 먼저 여기서 깨져야 한다.
+const out = document.getElementById('out');
+const log = (o) => { out.textContent += '\n' + JSON.stringify(o); };
+const result = {};
+
+async function main() {
+  result.crossOriginIsolated = self.crossOriginIsolated;
+  result.SharedArrayBuffer = typeof SharedArrayBuffer === 'function';
+  result.atomicsWaitAsync = typeof Atomics.waitAsync === 'function';
+  result.opfs = !!(navigator.storage && navigator.storage.getDirectory);
+  result.fsAccess = typeof window.showSaveFilePicker === 'function';
+  const est = await navigator.storage.estimate();
+  result.quotaGB = +(est.quota / 1e9).toFixed(1);
+
+  // 워커 안에서 동기 접근 핸들과 SAB 왕복이 실제로 되는지
+  const w = new Worker('capabilities-worker.js');
+  const fromWorker = await new Promise((res) => {
+    w.onmessage = (e) => res(e.data);
+    w.postMessage({start: true});
+  });
+  Object.assign(result, fromWorker);
+  out.textContent = JSON.stringify(result, null, 1);
+  document.title = 'done';
+}
+main().catch((e) => {
+  out.textContent = 'ERROR ' + e;
+  document.title = 'done';
+});
+</script></body></html>

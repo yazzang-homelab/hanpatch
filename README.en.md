@@ -203,6 +203,43 @@ terminal.
 
 Reference channel: <https://krpatch.duckdns.org/hpk/>
 
+### Applying it in a browser
+
+`web/apply` is the same pipeline, in wasm. Drag a ROM in, get the patched file
+out, with nothing installed and nothing uploaded. It does not reimplement the
+pipeline in JavaScript on purpose: a second copy of verified code drifts, and the
+drifting copy fails quietly. Here the result hash is checked against the
+author's build every run.
+
+```bash
+python3 tools/deploy_web.py --root /srv/krpatch-web --fetch-pyodide
+python3 web/serve.py --port 8123     # dev server, same COOP/COEP as production
+node web/run_headless.mjs "http://127.0.0.1:8123/selftest/engine.html?rom=…&bundle=…&keys=…"
+```
+
+Measured (headless Chromium 147, i5-9500):
+
+| target | command line | browser | result |
+|---|---|---|---|
+| reference title, 249 MB CIA | 9.7 s | 66–80 s | identical hash |
+| DQ7, 2.0 GB 3DS | 2 min 14 s | 8 min 6 s | identical hash |
+
+Three things were needed to make that work in a browser. Pyodide's
+`mountNativeFS` mirrors a directory into RAM, which is useless when the scratch
+space is 4.3 GB, so `web/apply/opfs-bridge.js` bridges OPFS into Emscripten's
+filesystem: a proxy worker owns the synchronous access handles and the Pyodide
+worker blocks on `SharedArrayBuffer` + `Atomics.wait`, which is why the path is
+served cross-origin isolated. Python reads and writes in 8 KB units and one
+round trip costs 19 µs, so each open file gets a 4 MB coalescing window and each
+node remembers its size — measured read amplification dropped from 6.2 GB to
+0.4 GB. And OPFS has no symlinks while the adapters stage untouched RomFS as
+links (DQ7 copies two directories out of 1.4 GB), so the bridge keeps an
+in-memory link table.
+
+Needs a current Chrome or Edge (OPFS synchronous access handles,
+`SharedArrayBuffer`). The server only has to serve static files with COOP/COEP
+headers on that path.
+
 ## Legal
 
 **You decide what you may lawfully do; this project does not decide it for you.**

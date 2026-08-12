@@ -282,6 +282,45 @@ python3 hpk-update.py --dir ~/patches # hanpatch 설치 없이도 같은 일
 
 레퍼런스 채널: <https://krpatch.duckdns.org/hpk/>
 
+### 브라우저에서 적용하기
+
+아무것도 설치하지 않고 ROM을 끌어다 놓는 쪽이 필요하면 `web/apply`가 그것이다.
+페이지는 **같은 파이프라인을 그대로** wasm(Pyodide)에서 돌린다. 자바스크립트로 다시
+구현하지 않는 이유는 분명하다 — 검증된 파이프라인의 사본이 하나 더 생기면 두 사본은
+반드시 갈라지고, 갈라진 쪽이 조용히 틀린다. 여기서는 결과 해시가 제작자 빌드와 같은지로
+매번 확인한다.
+
+```bash
+python3 tools/deploy_web.py --root /srv/krpatch-web --fetch-pyodide
+python3 web/serve.py --port 8123          # 개발용, 배포와 같은 COOP/COEP 헤더
+node web/run_headless.mjs "http://127.0.0.1:8123/selftest/engine.html?rom=…&bundle=…&keys=…"
+```
+
+실측(헤드리스 크로미움 147, i5-9500):
+
+| 대상 | 명령줄 | 브라우저 | 결과 |
+|---|---|---|---|
+| 레퍼런스 타이틀 249 MB CIA | 9.7초 | 66–80초 | 해시 동일 |
+| DQ7 2.0 GB 3DS | 2분 14초 | 8분 6초 | 해시 동일 |
+
+업로드는 없다. 파일은 워커로만 전달되고, 임시 파일은 브라우저의 OPFS(디스크)에
+쓰인다 — DQ7 한 번에 6.3 GB. 브라우저에서 이걸 성립시키는 데 세 가지가 필요했다.
+
+- **OPFS를 Emscripten 파일시스템으로 잇는 다리**(`web/apply/opfs-bridge.js`).
+  Pyodide의 `mountNativeFS`는 디렉터리 전체를 램에 복사해 두고 나중에 되쓴다. 스크래치가
+  4.3 GB인 작업에는 쓸 수 없다. OPFS 동기 접근 핸들은 디스크에 스트리밍하지만 만드는
+  일이 비동기이고 파이썬의 `open()`은 동기다. 그래서 프록시 워커가 실제 파일을 만지고,
+  파이오다이드 워커는 `SharedArrayBuffer` + `Atomics.wait`로 그것을 동기적으로 기다린다.
+  이 때문에 cross-origin isolation(COOP/COEP)이 필요하다.
+- **병합 창.** 파이썬은 8 KB 단위로 읽고 쓴다. 왕복 하나가 19 µs라 그대로 흘리면 1.5 GB
+  재조립이 10분을 넘긴다. 열린 파일마다 4 MB 창을 두어 순차 접근을 뭉치고, 크기는
+  노드에 기억해 `stat` 왕복을 없앤다. 실측으로 읽기 증폭 6.2 GB → 0.4 GB.
+- **메모리 심볼릭 링크 표.** OPFS에는 링크가 없다. 그런데 어댑터는 손대지 않는 RomFS를
+  링크로 세운다(DQ7은 1.4 GB 중 두 디렉터리만 실제로 복사한다). 링크를 지원하지 않으면
+  매번 기가바이트를 옮겨야 한다.
+
+크롬·엣지 최신 버전이 필요하다(OPFS 동기 접근 핸들, `SharedArrayBuffer`). 서버는 정적
+파일만 주면 되고, 그 경로에 COOP/COEP 헤더가 붙어 있어야 한다.
 ## 법적 사항
 
 **무엇이 합법인지는 당신이 판단한다. 이 프로젝트가 대신 판단해주지 않는다.**

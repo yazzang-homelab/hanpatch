@@ -406,6 +406,17 @@ standalone `hpk-update.py` safe to hand to a stranger. Do not answer "is there a
 newer patch" with a service that must be operated and authenticated; the answer
 is a file.
 
+For people who will not install anything, `web/apply` runs **this same pipeline**
+in wasm (Pyodide): the recipient drops their ROM on a page and the patch is
+applied locally, verified against the author's output hash. Measured: 8 min 6 s
+for a 2 GB 3DS against 2 min 14 s natively, identical sha256. Do not answer
+"make it work in the browser" by porting the container and crypto code to
+JavaScript — a second implementation of a verified pipeline drifts, and the
+drifting copy is the one that ships a corrupt ROM. What the browser actually
+needs is storage: `web/apply/opfs-bridge.js` gives Emscripten a real
+disk-backed filesystem over OPFS, because the scratch space for one 2 GB title
+is 4.3 GB and Pyodide's own native-FS mount mirrors everything into RAM.
+
 ## Legal
 
 **The operator decides what is lawful for them. Do not make that call for them,

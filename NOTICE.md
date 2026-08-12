@@ -14,6 +14,16 @@ Source code. No game data, no ROMs, no extracted text, no translated scripts, no
 key material, no fonts. Nothing in this repository is derived from a copyrighted
 game.
 
+The browser patcher under `web/apply` also ships no game data. It carries third
+party runtime pieces, all under permissive licences and all served from the same
+origin so nothing about your files reaches a third party:
+[Pyodide](https://pyodide.org) (MPL-2.0, CPython + wasm),
+[PyCryptodome](https://www.pycryptodome.org) (BSD-2/public domain),
+[Pillow](https://python-pillow.org) (HPND) and
+[hash-wasm](https://github.com/Daninet/hash-wasm) (MIT, self-test only).
+`tools/deploy_web.py` fetches them and records every file's SHA-256 in
+`build-manifest.json`.
+
 ## What you supply, and are responsible for
 
 - **The game.** Obtaining, dumping and holding a copy of any title you patch.

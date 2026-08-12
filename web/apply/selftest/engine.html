@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>engine selftest</title></head>
+<body><pre id="out">running…</pre>
+<script src="sha256.umd.min.js"></script>
+<script type="module">
+// 엔진 자체 검사: 픽스처 ROM 과 번들을 같은 출처에서 받아 워커에 넘기고, 나온
+// 파일의 sha256 이 번들이 예고한 제작자 빌드 해시와 같은지 본다. UI 를 거치지
+// 않으므로 헤드리스에서 그대로 돌아간다.
+//   ?rom=fixtures/game.cia&bundle=fixtures/patch.hpk[&keys=fixtures/aes_keys.txt]
+const out = document.getElementById('out');
+const q = new URLSearchParams(location.search);
+const lines = [];
+const result = {};
+const say = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+
+async function fetchFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  // arrayBuffer() 는 2GB 를 램에 올린다. blob 은 크롬이 디스크로 흘려 준다.
+  const blob = await r.blob();
+  return new File([blob], url.split('/').pop());
+}
+
+async function sha256(file) {
+  // WebCrypto 에는 스트리밍 digest 가 없다. 2GB 를 한 번에 넣으면 램이 터지므로
+  // 조각을 흘려 넣는 hash-wasm 을 쓴다. 엔진(파이썬/wasm)이 말한 해시를 다른
+  // 구현으로 다시 재는 것이 이 검사의 요점이다.
+  const hasher = await hashwasm.createSHA256();
+  hasher.init();
+  const CH = 16 << 20;
+  for (let at = 0; at < file.size; at += CH) {
+    hasher.update(new Uint8Array(
+        await file.slice(at, Math.min(at + CH, file.size)).arrayBuffer()));
+  }
+  return hasher.digest('hex');
+}
+
+async function main() {
+  const worker = new Worker('../worker.js', {type: 'module'});
+  const ready = new Promise((res, rej) => {
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'log') say('  ' + m.line);
+      else if (m.type === 'ready') res();
+      else if (m.type === 'failed') rej(new Error(m.error));
+    };
+    worker.onerror = (e) => rej(new Error(e.message));
+  });
+  worker.postMessage({cmd: 'boot'});
+  const t0 = performance.now();
+  await ready;
+  result.bootSeconds = +((performance.now() - t0) / 1000).toFixed(1);
+
+  const rom = await fetchFile(q.get('rom'));
+  const bundle = await fetchFile(q.get('bundle'));
+  const keys = q.get('keys') ? [await fetchFile(q.get('keys'))] : [];
+  say(`입력 ${rom.name} ${(rom.size / 1e9).toFixed(2)} GB, 번들 ${bundle.size} B`
+      + (keys.length ? `, 키 ${keys[0].name}` : ''));
+
+  const done = new Promise((res, rej) => {
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'beat') say(`  [beat ${m.elapsedS}s ${m.phase}] `
+          + JSON.stringify(m.stats));
+      else if (m.type === 'log') say('  ' + m.line);
+      else if (m.type === 'done') res(m.report);
+      else if (m.type === 'failed') rej(new Error(m.error));
+    };
+  });
+  worker.postMessage({cmd: 'run', rom, keys, profile: q.get('profile') === '1',
+                      bundleBytes: new Uint8Array(await bundle.arrayBuffer())});
+  const report = await done;
+  Object.assign(result, report);
+
+  // 워커가 말한 해시를 믿지 않고, OPFS 에 실제로 놓인 바이트를 다시 잰다.
+  const root = await navigator.storage.getDirectory();
+  async function tree(dir, prefix, depth) {
+    const rows = [];
+    for await (const [name, h] of dir.entries()) {
+      if (h.kind === 'directory') {
+        rows.push(prefix + name + '/');
+        if (depth > 0) rows.push(...await tree(h, prefix + name + '/', depth - 1));
+      } else {
+        rows.push(prefix + name + ' ' + (await h.getFile()).size);
+      }
+    }
+    return rows;
+  }
+  say('OPFS: ' + JSON.stringify(await tree(root, '', 2)));
+  say('opfsPath: ' + report.opfsPath);
+  let dir = root;
+  const parts = report.opfsPath.split('/');
+  const fname = parts.pop();
+  for (const p of parts) dir = await dir.getDirectoryHandle(p);
+  const fh = await dir.getFileHandle(fname);
+  const file = await fh.getFile();
+  result.fileSize = file.size;
+  result.measured = await sha256(file);
+  result.matchesAuthorBuild = result.measured === report.expected;
+  result.reportedSameAsMeasured = result.measured === report.sha256;
+  out.textContent = lines.join('\n') + '\n\n' + JSON.stringify(result, null, 1);
+  document.title = 'done';
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\nERROR ' + (e.stack || e);
+  document.title = 'done';
+});
+</script></body></html>

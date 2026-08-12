@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>한글패치 적용 도구 — 브라우저에서, 로컬에서</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>한글패치 적용 도구</h1>
+<p class="lede">원본 ROM 을 아래에 끌어다 놓으면 <strong>이 브라우저 안에서</strong>
+패치가 적용됩니다. 파일은 어디로도 올라가지 않습니다 — 서버로 보내는 코드가
+아예 없고, 계산은 전부 당신의 CPU 에서, 임시 파일은 당신의 디스크에서만
+움직입니다. 결과는 제작자가 빌드한 것과 바이트 단위로 같아야 하며, 도구가 그
+해시를 직접 확인해 줍니다.</p>
+
+<section id="requirements" class="box"></section>
+
+<section class="box">
+  <h2>1. 원본 ROM</h2>
+  <div class="drop" id="drop-rom" tabindex="0">
+    <p><strong>여기에 .3ds 또는 .cia 파일을 놓으세요</strong></p>
+    <p class="muted">또는 <label class="link">파일 선택<input type="file"
+       id="file-rom" accept=".3ds,.cci,.cia" hidden></label></p>
+    <p class="picked" id="picked-rom"></p>
+  </div>
+</section>
+
+<section class="box">
+  <h2>2. 키 파일</h2>
+  <p class="muted">암호화된 카트리지 덤프를 복호화하려면 콘솔 키가 필요합니다.
+  <code>boot9.bin</code> 또는 <code>aes_keys.txt</code> 를 놓으세요. 이 파일도
+  올라가지 않습니다. 이미 복호화된 덤프라면 건너뛰어도 됩니다.</p>
+  <div class="drop" id="drop-keys" tabindex="0">
+    <p class="muted"><label class="link">파일 선택<input type="file"
+       id="file-keys" multiple hidden></label></p>
+    <p class="picked" id="picked-keys"></p>
+  </div>
+</section>
+
+<section class="box">
+  <h2>3. 패치 번들</h2>
+  <div id="bundle-list" class="muted">채널을 읽는 중…</div>
+  <div class="drop small" id="drop-bundle" tabindex="0">
+    <p class="muted">직접 받은 <code>.hpk</code> 가 있으면 여기에 놓으세요
+    (<label class="link">파일 선택<input type="file" id="file-bundle"
+     accept=".hpk" hidden></label>)</p>
+    <p class="picked" id="picked-bundle"></p>
+  </div>
+</section>
+
+<section class="box">
+  <h2>4. 적용</h2>
+  <p id="plan" class="muted">위의 1·3 이 채워지면 시작할 수 있습니다.</p>
+  <p>
+    <button id="start" disabled>패치 적용</button>
+    <label class="inline"><input type="checkbox" id="force">
+      입력 해시가 달라도 계속 (권장하지 않음)</label>
+  </p>
+  <div id="progress" hidden>
+    <div class="bar"><div id="bar-fill"></div></div>
+    <p id="phase" class="muted"></p>
+  </div>
+  <div id="result" hidden></div>
+  <details id="log-box"><summary>기록</summary><pre id="log"></pre></details>
+</section>
+
+<footer>
+  <p class="muted">패치할 게임을 정당하게 소유할 책임과 거주지 법을 지킬 책임은
+  이용자에게 있습니다. 이 도구는 번역문과 글꼴만 다루며 게임 데이터를 배포하지
+  않습니다. 같은 일을 명령줄에서 하려면
+  <code>pip install hanpatch</code> 뒤 <code>hanpatch apply</code>,
+  갱신 확인은 <a href="../hpk/">업데이트 채널</a>을 보세요.</p>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

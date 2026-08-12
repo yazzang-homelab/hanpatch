@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>rehash</title>
+<script src="sha256.umd.min.js"></script></head>
+<body><pre id="out">running…</pre>
+<script>
+// 엔진이 말한 해시를 믿지 않기 위한 독립 확인. 파이썬(wasm)이 쓴 OPFS 파일을
+// 페이지에서 다시 읽어 스트리밍 SHA-256 을 돌린다. WebCrypto 에는 스트리밍이
+// 없어 2GB 를 한 번에 digest 할 수 없으므로 hash-wasm 을 쓴다.
+//   ?path=hanpatch-scratch/out/patched.3ds
+const out = document.getElementById('out');
+(async () => {
+  const path = new URLSearchParams(location.search).get('path');
+  const parts = path.split('/');
+  const name = parts.pop();
+  let dir = await navigator.storage.getDirectory();
+  for (const p of parts) dir = await dir.getDirectoryHandle(p);
+  const file = await (await dir.getFileHandle(name)).getFile();
+  const hasher = await hashwasm.createSHA256();
+  hasher.init();
+  const CH = 16 << 20;
+  const t0 = performance.now();
+  for (let at = 0; at < file.size; at += CH) {
+    const buf = new Uint8Array(
+        await file.slice(at, Math.min(at + CH, file.size)).arrayBuffer());
+    hasher.update(buf);
+  }
+  const digest = hasher.digest('hex');
+  out.textContent = JSON.stringify({
+    path, size: file.size, sha256: digest,
+    seconds: +((performance.now() - t0) / 1000).toFixed(1),
+  }, null, 1);
+  document.title = 'done';
+})().catch((e) => {
+  out.textContent = 'ERROR ' + (e.stack || e);
+  document.title = 'done';
+});
+</script></body></html>

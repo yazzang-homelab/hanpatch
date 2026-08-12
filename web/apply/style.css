@@ -1,0 +1,94 @@
+/* 브라우저 패처의 겉모습. 장식보다 상태가 먼저 보이도록. */
+:root { color-scheme: light dark; }
+body {
+  max-width: 54rem;
+  margin: 2rem auto;
+  padding: 0 1rem 4rem;
+  font: 16px/1.65 system-ui, "Noto Sans KR", sans-serif;
+  color: #1b1b1b;
+  background: #fff;
+}
+h1 { font-size: 1.5rem; margin-bottom: .4rem; }
+h2 { font-size: 1.05rem; margin: 0 0 .6rem; }
+h3 { font-size: 1.05rem; margin: 0 0 .6rem; }
+.lede { color: #333; }
+.muted { color: #666; font-size: .92em; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .86em;
+        word-break: break-all; }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; }
+.box {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+  margin: 1rem 0;
+}
+.drop {
+  border: 2px dashed #c9c9c9;
+  border-radius: 6px;
+  padding: 1.4rem 1rem;
+  text-align: center;
+  transition: background .12s, border-color .12s;
+}
+.drop.small { padding: .7rem; text-align: left; }
+.drop.over { border-color: #2b6cb0; background: #eef5fc; }
+.drop p { margin: .25rem 0; }
+.picked { color: #1a5c2a; font-weight: 600; }
+.link { color: #2b6cb0; text-decoration: underline; cursor: pointer; }
+.choice {
+  display: flex;
+  gap: .6rem;
+  align-items: flex-start;
+  padding: .5rem .6rem;
+  border: 1px solid #e6e6e6;
+  border-radius: 5px;
+  margin-bottom: .4rem;
+  cursor: pointer;
+}
+.choice.sel { border-color: #2b6cb0; background: #f3f8fd; }
+button {
+  font: inherit;
+  padding: .5rem 1.1rem;
+  border: 1px solid #2b6cb0;
+  background: #2b6cb0;
+  color: #fff;
+  border-radius: 5px;
+  cursor: pointer;
+}
+button[disabled] { opacity: .45; cursor: not-allowed; }
+button.plain { background: #fff; color: #2b6cb0; }
+.inline { margin-left: .8rem; font-size: .9em; color: #555; }
+.bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+#bar-fill { height: 100%; width: 0; background: #2b6cb0; transition: width .4s; }
+table { border-collapse: collapse; margin: .5rem 0; width: 100%; }
+th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #eee;
+         vertical-align: top; }
+th { width: 8rem; color: #555; font-weight: 600; }
+ul { margin: .4rem 0; padding-left: 1.1rem; }
+li.ok { color: #1a5c2a; }
+li.bad { color: #a01b1b; }
+.bad { color: #a01b1b; }
+pre {
+  background: #f6f6f6;
+  padding: .7rem;
+  border-radius: 5px;
+  max-height: 22rem;
+  overflow: auto;
+  font-size: .82em;
+  white-space: pre-wrap;
+}
+footer { margin-top: 2rem; border-top: 1px solid #eee; padding-top: .8rem; }
+@media (prefers-color-scheme: dark) {
+  body { background: #17181a; color: #e6e6e6; }
+  .box { border-color: #333; }
+  .drop { border-color: #444; }
+  .drop.over { background: #1d2733; border-color: #5b9bd5; }
+  .choice { border-color: #333; }
+  .choice.sel { background: #1d2733; border-color: #5b9bd5; }
+  pre { background: #1f2124; }
+  .muted, th { color: #a5a5a5; }
+  .lede { color: #d5d5d5; }
+  li.ok { color: #7ddc9a; }
+  li.bad, .bad { color: #ff9c9c; }
+  button.plain { background: #17181a; color: #7fb2e5; }
+  .bar { background: #2a2c30; }
+}

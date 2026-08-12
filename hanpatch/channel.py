@@ -222,6 +222,11 @@ python3 hpk-update.py --dir ~/patches</pre>
 합니다.</p>
 
 <h2>적용</h2>
+<p><strong><a href="{apply}">브라우저에서 바로 적용하기</a></strong> — 원본 ROM을
+끌어다 놓으면 그 자리에서 패치합니다. 파일은 어디로도 올라가지 않고 계산도
+저장도 전부 당신의 기기에서 일어납니다. 크롬·엣지 최신 버전이 필요하고, 2GB
+ROM 하나에 임시 공간이 7GB 가량 필요합니다.</p>
+<p class="muted">명령줄이 편하면 이쪽입니다.</p>
 <pre>pip install hanpatch
 hanpatch apply "<i>내려받은.hpk</i>" --rom /경로/내ROM.3ds</pre>
 
@@ -263,6 +268,7 @@ def write_page(root, doc):
     if not rows:
         rows = ['<p class="muted">아직 배포된 번들이 없습니다.</p>']
     html = PAGE.format(base=doc.get('url_base', ''), rows='\n'.join(rows),
+                       apply=doc.get('apply_url', '../apply/'),
                        generated=doc['generated'])
     tmp = os.path.join(root, 'index.html.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
