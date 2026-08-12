@@ -105,17 +105,32 @@ def instruction(text):
 # register: the narrow set called 17.1% divergent, the wide set 14.3%, so 2.8 points were
 # pattern gaps and 14.3 points are real.
 _KO_POLITE = re.compile(
-    # '니다' rather than a list of 습니다/입니다/합니다: the polite declarative is formed
-    # by attaching -ㅂ니다 to any stem, so enumerating stems is endless and misses the
-    # common ones. Writing 'ㅂ니다' as a literal was worse than useless - a standalone jamo
-    # never appears in composed Hangul, so 갑니다 was read as plain.
-    # '니까' is NOT here. It is the tail of the polite question -ㅂ니까 AND an ordinary
-    # plain connective: measured on this corpus, all 24 rows where it fired on a
+    # '니다' is NOT a bare member here, for the same reason '니까' is not: the polite
+    # declarative is -ㅂ니다, and a bare '니다' also ends the PLAIN 아니다 / 매니다. Measured
+    # after full-width stops stopped hiding sentence endings: 4 of the 8 rows the register
+    # gate still rejected were '…올 곳은 아니다.' answering a plain source, scored polite
+    # because '아니다' ends in '니다'. The polite reading is recognised by _polite_nida,
+    # which requires the syllable before 니다 to carry the ㅂ the polite form always has.
+    # '니까' is likewise excluded: measured on this corpus, all 24 rows where it fired on a
     # plain-marked source were 그러니까 / 없으니까 / 테니까 / 다니까 - "because", not a
-    # question. The polite reading is recognised separately by _polite_nikka, which
-    # requires the preceding syllable to end in the jamo the polite form always carries.
-    r'(니다|세요|셔요|십시오|시오|해요|예요|이에요'
+    # question. _polite_nikka applies the same jamo test.
+    r'(세요|셔요|십시오|시오|해요|예요|이에요'
+    # -나요 / -ㄴ가요 / -ㄹ까요 / -군요 / -네요: polite endings that carry 요 as their own
+    # syllable. Their absence read '마왕의 성은 이미 보셨나요?' as carrying no polite
+    # marker at all, so a polite source scored as divergent against a polite translation.
+    r'|나요|가요|까요|군요|네요'
     r'|어요|아요|지요|죠|시겠|드려요|주세요)')
+
+# -ㅂ니다 / -습니다: same arithmetic as -ㅂ니까 below.
+_NIDA = re.compile(r'([\uac00-\ud7a3])니다')
+
+
+def _polite_nida(ko):
+    for m in _NIDA.finditer(ko):
+        if (ord(m.group(1)) - 0xAC00) % 28 == 17:
+            return True
+    return False
+
 
 # -ㅂ니까 / -습니까: the syllable before 니까 ends with the final consonant ㅂ. Composed
 # Hangul makes that arithmetic rather than a character class - (code - 0xAC00) % 28 is the
@@ -129,15 +144,29 @@ def _polite_nikka(ko):
             return True
     return False
 
+# -ㅂ시다 / -읍시다: the polite propositive, and the plain pattern's bare `다` swallows it.
+# Measured after full-width stops stopped hiding sentence endings: of 88 rows the register
+# gate then rejected, 16 were 합시다 / 봅시다 / 놓읍시다 answering a ましょう source - polite
+# exhortations scored as plain speech. Retranslation cannot fix those; the reading was
+# wrong. Same arithmetic as -ㅂ니까: the syllable before 시다 carries final ㅂ (index 17).
+_SIDA = re.compile(r'([\uac00-\ud7a3])시다')
+
+
+def _polite_sida(ko):
+    for m in _SIDA.finditer(ko):
+        if (ord(m.group(1)) - 0xAC00) % 28 == 17:
+            return True
+    return False
+
+
 def _polite_ending(text):
     """Whether the final sentence ending, rather than an embedded quote, is polite."""
     core = text.rstrip('.!?…"\'\u300d\u300f)] \t')
     if any(m.end() == len(core) for m in _KO_POLITE.finditer(core)):
         return True
-    for m in _NIKKA.finditer(core):
-        if m.end() == len(core):
-            prev = m.group(1)
-            if (ord(prev) - 0xAC00) % 28 == 17:
+    for pattern in (_NIKKA, _SIDA, _NIDA):
+        for m in pattern.finditer(core):
+            if m.end() == len(core) and (ord(m.group(1)) - 0xAC00) % 28 == 17:
                 return True
     return False
 
@@ -164,7 +193,8 @@ def of_korean(ko):
     """
     if not ko:
         return None
-    polite = bool(_KO_POLITE.search(ko) or _polite_nikka(ko))
+    polite = bool(_KO_POLITE.search(ko) or _polite_nikka(ko) or _polite_sida(ko)
+                  or _polite_nida(ko))
     tail = re.sub(r'<[^>]*>|\{[^}]*\}', '', ko.strip().split('\n')[-1]).strip()
     tail_polite = _polite_ending(tail)
     plain = bool(_KO_PLAIN.search(tail)) and not tail_polite

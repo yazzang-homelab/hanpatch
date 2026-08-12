@@ -4,6 +4,7 @@
     hanpatch info
     hanpatch extract
     hanpatch translate --family dialogue [--workers 4]
+    hanpatch a6-translate ...                 isolated DQ7 A6 pilot (dedicated parser)
     hanpatch fonts
     hanpatch gates
     hanpatch qa      [--judges 2] [--workers 4]
@@ -90,11 +91,19 @@ def cmd_translate(args):
     if args.workers:
         argv += ['--workers', str(args.workers)]
     if args.batch:
-        argv += ['--batch', str(args.batch)]
+        # `--batch` means STRINGS per call, the same as it does on `hanpatch qa`.
+        # It used to be forwarded verbatim, and the runner has no such option, so
+        # argparse abbreviation resolved it to `--batch-chars`: a window of eight
+        # SOURCE CHARACTERS. Every call then carried one string and repaid the full
+        # ~768-token prompt prefix. The cost ledger shows 57,621 of 57,621 flash
+        # calls like that. Forward the flag the runner actually has.
+        argv += ['--max-items', str(args.batch)]
     if args.refail:
         argv.append('--refail')
     if args.qafail:
         argv.append('--qafail')
+    if args.qa_list:
+        argv += ['--qa-list', args.qa_list]
     return run.main(argv) or 0
 
 
@@ -225,8 +234,16 @@ def cmd_all(args):
 
 
 def main(argv=None):
+    # The isolated A6 lane owns a stricter parser, output namespace and budget.
+    # Dispatch before constructing the ordinary CLI so this path cannot build the
+    # normal provider pool or accidentally inherit model/retry switches.
+    command = list(sys.argv[1:] if argv is None else argv)
+    if command and command[0] == 'a6-translate':
+        from hanpatch import a6isolated_run
+        return a6isolated_run.main(command[1:])
     ap = argparse.ArgumentParser(prog='hanpatch', description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+                                formatter_class=argparse.RawDescriptionHelpFormatter,
+                                allow_abbrev=False)
     ap.add_argument('--project', help='project directory (default: nearest '
                                       'parent with hanpatch.json)')
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -260,6 +277,9 @@ def main(argv=None):
     s.add_argument('--batch', type=int)
     s.add_argument('--refail', action='store_true')
     s.add_argument('--qafail', action='store_true')
+    s.add_argument('--qa-list', default='',
+                   help='precomputed actionable map for --qafail, so one process per '
+                        'family does not re-read the whole verdict file each time')
     s.set_defaults(fn=cmd_translate)
 
     s = sub.add_parser('fonts', help='build target-language fonts')

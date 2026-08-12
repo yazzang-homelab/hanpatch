@@ -180,6 +180,25 @@ STYLE_DEFAULT = {
 STYLE = dict(STYLE_DEFAULT)
 STYLE.update(config.prof('register') or {})
 
+# The string tables are not dialogue: they are menu labels, commands, and the item,
+# monster, job and place names the dialogue interpolates. A sentence style produces
+# '싸운다' where a Korean menu says '싸우기', and a name rendered as a sentence is worse
+# still. Their families are the only ones prefixed '@', so the style follows the prefix
+# rather than needing 28 profile entries that would drift from the file list.
+TABLE_STYLE = (
+    '게임 UI 문자열 표다. 대사가 아니라 메뉴 항목·명령·아이템/몬스터/직업/지명 이름이다. '
+    '동작을 고르는 메뉴 항목은 한국어 메뉴 관례대로 명사형(~하기/~기)으로 옮긴다: '
+    'たたかう→싸우기, にげる→도망치기, つかう→사용하기. '
+    '이름은 문장이 아니라 이름으로 옮기고 서술어를 붙이지 않는다. '
+    '대사에서 이미 쓰인 표기가 있으면 그 표기를 따른다. 화면 폭이 좁으니 짧게 유지한다.')
+
+
+def style_for(kind):
+    if kind and kind.startswith('@'):
+        return TABLE_STYLE
+    return STYLE.get(kind, STYLE['default'])
+
+
 SOURCE_LANG_NAME = {'en': '영어', 'ja': '일본어'}
 
 # Rule 5 forbids leaving SOURCE-language words untranslated. Which script that
@@ -349,6 +368,51 @@ def dq7_delimiter_problems(text):
     return []
 
 
+# Japanese lays a record out with ideographic spaces: a continuation line opens with
+# `　　`, and a clause break inside a line is padded rather than punctuated. A translator
+# copies that padding because it is part of the source string, and then `wrap.fits`
+# re-flows the Korean - so the padding stops being an indent and lands mid-sentence.
+# Measured on this corpus before this ran: 58,347 of 65,836 shipped rows (88.6%) carried a
+# run of three or more spaces, which is what a player sees as holes in the dialogue.
+#
+# The fix belongs here rather than in the prompt because a prompt cannot be enforced: the
+# value this function returns is the one the manifest seals, the panel judges and the
+# injector writes, so all three see the same string.
+_WS_RUN = re.compile(r'[ \u3000\t]{2,}')
+_FW_PUNCT = {'。': '.', '、': ',', '！': '!', '？': '?', '：': ':', '；': ';'}
+_FW_PUNCT_RE = re.compile('[' + ''.join(_FW_PUNCT) + ']')
+
+
+def normalise_ja_layout(en, ko):
+    """Strip the source's layout padding out of a Japanese-sourced translation.
+
+    Only the ja path: an English source has no ideographic padding convention, and the
+    reference title must keep producing identical bytes.
+
+    Whitespace INSIDE a tag is left alone - `{2とくてん}` and friends are markup, and
+    collapsing a run there would rewrite a delimiter rather than a layout artefact.
+    """
+    if source_lang() != 'ja' or not ko:
+        return ko
+    out = []
+    for piece in re.split(f'({TAG_RE.pattern})', ko):
+        if not piece:
+            continue
+        if TAG_RE.fullmatch(piece):
+            out.append(piece)
+            continue
+        # A run of padding is one word gap, never a hole. Full-width stops are the
+        # source's punctuation, not Korean punctuation, and reading them as Japanese
+        # residue is exactly what a player reported.
+        piece = _WS_RUN.sub(' ', piece.replace('\u3000', ' '))
+        piece = _FW_PUNCT_RE.sub(lambda m: _FW_PUNCT[m.group()], piece)
+        out.append(piece)
+    ko = ''.join(out)
+    # Per display line: no leading or trailing padding. `wrap.fits` re-flows the text
+    # afterwards, so an indent written here would not survive as an indent anyway.
+    return '\n'.join(line.strip(' \t') for line in ko.split('\n'))
+
+
 def check(en, ko, gl, kind='default', group=None):
     """Return (rewrapped_ko, problems). problems == [] means valid."""
     problems = []
@@ -386,6 +450,17 @@ def check(en, ko, gl, kind='default', group=None):
         if bool(a.strip()) != bool(b.strip()):
             problems.append(f'text moved across control tag boundary at segment {i}')
             break
+    # A soft-break marker is layout the CONTAINER owns: the engine breaks the name there
+    # when the box is too narrow, so dropping it turns a name that wrapped cleanly into
+    # one that overflows or clips. Nothing else in this checker sees it, because it is not
+    # a tag - it is one character inside a word. Measured on the string tables: of 1348
+    # rows carrying it, 328 translations had silently dropped it.
+    mark = config.prof('soft_break')
+    if mark and en.count(mark) != ko.count(mark):
+        problems.append(f'soft-break marker {mark!r}: source has {en.count(mark)}, '
+                        f'translation has {ko.count(mark)}')
+        return ko, problems
+    ko = normalise_ja_layout(en, ko)
     # deterministic josa repair right after fixed proper nouns
     ko, _ = josa.fix_after(ko, set(glossary.hard().values()))
     ko = josa.fix_eu_ro(ko)
@@ -511,7 +586,7 @@ def build_prompt(items, gl_subset, kind, context):
     first, as this did, meant almost nothing after the system prompt could ever be reused.
     """
     parts = []
-    parts.append(f'[문맥/문체 지침] {STYLE.get(kind, STYLE["default"])}')
+    parts.append(f'[문맥/문체 지침] {style_for(kind)}')
     # Enforced terms are title-wide and identical for every batch: they belong in the
     # cacheable prefix, not in the per-batch block, even though they also appear there.
     hard = {t: k for t, k in sorted(glossary.enforced_contract().items())}
@@ -646,10 +721,26 @@ class Translator:
         """
         return next(self._seat)
 
-    def _next_provider(self, attempt=0, seat=0):
+    def _next_provider(self, attempt=0, seat=0, exclude=()):
         # Skip endpoints whose rotator has told us its keys are parked. Asking anyway
         # spends an attempt on a certain 429 - measured, 86 of 211 calls in one run.
-        live = providers.available(self.pool) or self.pool
+        #
+        # The fallback when everything is parked is the LIVE pool, not the whole
+        # pool: a parked lane is busy and worth waiting for, but a retired one has
+        # failed LANE_ERROR_LIMIT times in a row and asking it again spends a full
+        # timeout to learn nothing. Falling back to `self.pool` put dead lanes
+        # back into rotation at exactly the moment the surviving ones were
+        # saturated, which is the worst time to waste an attempt.
+        pool = (providers.available(self.pool)
+                or providers.live(self.pool)
+                or self.pool)
+        # `exclude` is the set of lanes that ALREADY failed this batch. Without it a
+        # batch re-picks a lane it just watched fail: with three of five lanes
+        # broken, a 12-row run lost 4 rows because one batch spent all five attempts
+        # on two dead endpoints while two healthy ones sat idle. Preferring untried
+        # lanes is what makes "any two of these may die" true rather than likely.
+        untried = [p for p in pool if p.id not in exclude]
+        live = untried or pool
         n = len(live)
         if attempt < 2:
             return live[seat % n]
@@ -660,8 +751,16 @@ class Translator:
 
     def batch(self, items, context=(), attempts=None):
         """items: list of {'en': str}. Returns (results dict idx->ko, failures list)."""
-        attempts = attempts or max(3, len(self.pool))
+        # Attempts are counted against the lanes that can still answer, not the
+        # nominal pool size. With lanes retiring mid-run, `len(self.pool)` promises
+        # attempts that no longer exist; with a big healthy pool it is also the
+        # number of DISTINCT lanes worth trying before giving up on a batch.
+        attempts = attempts or max(3, len(providers.live(self.pool)) + 1)
         seat = self.seat()
+        # Lanes that already failed THIS batch. Reset per batch, not per run: a lane
+        # that could not do one batch is often fine on the next one, and retiring is
+        # handled by the provider's own consecutive-failure count.
+        tried = set()
         gl_subset = glossary.relevant(self.gl, [it['en'] for it in items], self.kind)
         pending = list(range(len(items)))
         results = {}
@@ -670,7 +769,7 @@ class Translator:
             if not pending:
                 break
             sub = [items[i] for i in pending]
-            prov = self._next_provider(attempt, seat)
+            prov = self._next_provider(attempt, seat, exclude=tried)
             prompt = build_prompt(sub, gl_subset, self.kind, context)
             qa = [f"id {i}: {s['qa']}" for i, s in enumerate(sub) if s.get('qa')]
             if qa:
@@ -689,12 +788,14 @@ class Translator:
             except RuntimeError as e:
                 if self.verbose:
                     print(f'    ! {e}'[:200], flush=True)
+                tried.add(prov.id)
                 feedback = ''
                 continue
             obj = parse_json(raw, want=[str(i) for i in range(len(sub))])
             if not isinstance(obj, dict):
                 if self.verbose:
                     print(f'    ! {prov.id} returned non-JSON', flush=True)
+                tried.add(prov.id)
                 continue
             fails = []
             still = []

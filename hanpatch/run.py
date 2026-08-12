@@ -69,6 +69,47 @@ def save_json_locked(path, updates, removals=(), what='the translation state sha
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
+def REPAIRED_PATH():
+    return config.out('repaired-since-seal.json')
+
+
+def repaired_since_seal():
+    """Sources repaired since the last seal, so a second pass does not redo them.
+
+    `qa_reasons` decides what to repair by comparing a verdict against the value the
+    manifest SEALED. That is the right comparison - it is the value the panel judged, and
+    comparing against the raw translation memory instead discarded 13339 of 13788 real
+    complaints as stale. The price of being right there is that a repair is invisible to
+    the selector until the next seal, so a second pass over one seal pays again for every
+    row the first pass already fixed, and reports success both times.
+
+    This is the memory that was missing: written when a repair stores a value, cleared by
+    the seal, and consulted only to SKIP work. It cannot hide a defect, because after a
+    seal the selector reads the new value for itself.
+    """
+    path = REPAIRED_PATH()
+    if not os.path.exists(path):
+        return set()
+    try:
+        return set(config.load_object(path, 'the repaired-since-seal record'))
+    except (OSError, SystemExit):
+        return set()
+
+
+def note_repaired(sources):
+    """Record repaired sources. Additive and locked: families repair in parallel."""
+    if sources:
+        save_json_locked(REPAIRED_PATH(), {en: 1 for en in sources},
+                         what='the repaired-since-seal record')
+
+
+def clear_repaired():
+    """Called by the seal. After it, the selector can see the new values itself."""
+    path = REPAIRED_PATH()
+    if os.path.exists(path):
+        os.remove(path)
+
+
 def shipped_values(src, manifest_entries):
     """source text -> the value the QA panel actually judged.
 
@@ -88,29 +129,121 @@ def shipped_values(src, manifest_entries):
     return out
 
 
-def qa_reasons(flagged, shipped, floor):
+def judged_values(ledger):
+    """source -> the set of translations already judged for it.
+
+    One repair attempt is one new value: a repaired row is a new `pair_key` and arrives at
+    the panel with no verdicts, so the number of distinct judged values IS the number of
+    attempts that source has consumed.
+    """
+    tried = {}
+    for recs in ledger.values():
+        for rec in recs if isinstance(recs, list) else ():
+            if isinstance(rec, dict) and rec.get('en'):
+                tried.setdefault(rec['en'], set()).add(rec.get('ko'))
+    return tried
+
+
+def qa_reasons(flagged, shipped, floor, ledger=None, max_attempts=0,
+               producers=None, corroboration=1):
     """source -> actionable judge complaints, from the `pair_key`-keyed QA review.
 
     A pair is listed when ANY of its records is flagged, so the passing records in the
     same list are not work. A complaint is dropped once the value it judged is no longer
     the shipped one, because a later repair already answered it.
+
+    With `max_attempts`, a source that has already been retranslated that many times is
+    left out: measured on DQ7 2026-08-05, 380 of 1734 badly flagged pairs had been through
+    three or more retranslations and were still badly flagged, and re-running the same
+    prompt on them only delayed the 1022 pairs that had been tried once. Those rows need a
+    decision, not another retry - `qa_stalled` is the list to decide on.
+    With `corroboration` above 1, a subjective complaint is only work when that many
+    eligible judges make one about the same pair. This has to match what the GATE blocks or
+    the two disagree about what "done" means: measured on DQ7 2026-08-10, selecting on any
+    single vote queued 2112 families of which the gate would have blocked ~1121 - the rest
+    was retranslating text that was already releasable, and each such rewrite came back
+    19% flagged by some other judge with some other preference. A score below the floor is
+    a measurement, not a preference, so it is work on one vote; so is a defect from the
+    model that produced the row, which is an admission against interest.
     """
+    from hanpatch import qagate   # local: qagate imports this module's callers
     reasons = {}
     for recs in flagged.values():
+        findings = []
+        blockers = []
         for rec in recs if isinstance(recs, list) else ():
             if not isinstance(rec, dict):
                 continue
-            if (rec.get('d') == 'pass'
-                    and min(rec.get('a', 0), rec.get('f', 0)) >= floor):
-                continue
             en = rec.get('en')
+            # A complaint about a value that is no longer shipped was already answered.
             if not en or shipped.get(en) != rec.get('ko'):
                 continue
-            reasons.setdefault(en, []).append(str(rec.get('r', '')).strip())
+            why = str(rec.get('r', '')).strip()
+            if min(rec.get('a', 0), rec.get('f', 0)) < floor:
+                blockers.append((en, why))
+                continue
+            if rec.get('d') == 'pass':
+                continue
+            own = bool(producers) and qagate.disqualified(
+                rec, producers.get(en, '')) is not None
+            (blockers if own else findings).append((en, why))
+        for en, why in blockers:
+            reasons.setdefault(en, []).append(why)
+        if len(findings) >= corroboration:
+            for en, why in findings:
+                reasons.setdefault(en, []).append(why)
+    if ledger is not None and max_attempts:
+        tried = judged_values(ledger)
+        reasons = {en: r for en, r in reasons.items()
+                   if len(tried.get(en, ())) < max_attempts}
     return reasons
 
+
+def qa_stalled(flagged, shipped, floor, ledger, max_attempts,
+               producers=None, corroboration=1):
+    """The complaints retranslation has stopped answering: attempts spent, still flagged.
+
+    Takes the same corroboration policy as `qa_reasons`, or it would report rows as stalled
+    that the gate is no longer blocking on - a decision queue full of releasable text.
+    """
+    if not max_attempts:
+        return {}
+    tried = judged_values(ledger)
+    return {en: {'attempts': len(tried.get(en, ())), 'reasons': r}
+            for en, r in qa_reasons(flagged, shipped, floor,
+                                    producers=producers,
+                                    corroboration=corroboration).items()
+            if len(tried.get(en, ())) >= max_attempts}
+
+
+# The shortest useful batch window. A DQ7 source line measures 133 UTF-8 bytes on
+# average and 344 at the longest, so a cap below this cannot hold even one string
+# and every "batch" degenerates to a single-item call that still pays the full
+# prompt prefix. This is a floor against a typo, not a tuning knob.
+MIN_BATCH_CHARS = 400
+
+
+def check_batch_sanity(parser, args):
+    """Refuse a batch configuration that cannot amortize the prompt prefix."""
+    if args.max_items < 1:
+        parser.error('--max-items must be at least 1')
+    if args.batch_chars < MIN_BATCH_CHARS:
+        parser.error(
+            f'--batch-chars {args.batch_chars} is below the {MIN_BATCH_CHARS}-char '
+            'floor: a window this small holds one string per call, so every call '
+            'repays the whole prompt prefix. If you meant a different flag, name it '
+            'in full - abbreviations are rejected on purpose.')
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False is load-bearing, not tidiness. argparse's prefix matching
+    # silently resolved `--batch 8` to `--batch-chars 8`, capping a batch at eight
+    # SOURCE CHARACTERS and collapsing the run to one string per call. The cost
+    # ledger recorded the damage: 57,621 of 57,621 flash calls carried a single
+    # unit, each paying a ~768-token prefix to translate ~42 tokens of Japanese.
+    # DeepSeek's cache priced that prefix at 1/50 so it stayed invisible; on a
+    # uniform-rate endpoint the same mistake is the entire bill.
+    ap = argparse.ArgumentParser(prog='hanpatch translate', allow_abbrev=False)
     ap.add_argument('--family', required=True)
     ap.add_argument('--batch-chars', type=int, default=2600)
     ap.add_argument('--max-items', type=int, default=14)
@@ -121,7 +254,12 @@ def main(argv=None):
                     help='re-translate entries whose current value fails validation')
     ap.add_argument('--qafail', action='store_true',
                     help='re-translate entries the semantic QA judge flagged')
+    ap.add_argument('--qa-list', default='',
+                    help='precomputed source -> complaints map for --qafail '
+                         '(hanpatch.run.qa_reasons output); skips re-reading the verdict '
+                         'file, which is the whole cost when one process runs per family')
     args = ap.parse_args(argv)
+    check_batch_sanity(ap, args)
 
     providers.load_dotenv()
     if args.models:
@@ -132,16 +270,50 @@ def main(argv=None):
     src = config.load_object(config.src_path(), 'the extracted source')
     if args.qafail:
         from hanpatch import manifest as manmod
-        from hanpatch import qagate
-        flagged = config.load_object(config.out('qa_flagged.json'),
-                                     'the QA flagged review')
-        man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
-        reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR)
-        # Make a no-op visible. This pass once matched nothing because the review file is
-        # keyed by pair, not by source, and it still reported success per family; the two
-        # counts side by side turn that class of silent failure into something a log shows.
-        print(f'qa review: {len(flagged)} flagged pairs, '
-              f'{len(reasons)} sources actionable', flush=True)
+        from hanpatch import qa, qagate
+        if args.qa_list:
+            # One process per family times an 80MB verdict file - read twice, because the
+            # loader verifies what it read - was 120s of the 135s a family took, for an
+            # answer identical in all 300 of them. The caller computes it once.
+            reasons = config.load_object(args.qa_list, 'the QA actionable list')
+            print(f'qa review: {len(reasons)} sources actionable '
+                  f'(from {args.qa_list})', flush=True)
+        else:
+            flagged = config.load_object(config.out('qa_flagged.json'),
+                                         'the QA flagged review')
+            man = config.load_object(manmod.PATH(), 'the sealed manifest')['entries']
+            # The selector must agree with the gate about what blocks release; see
+            # `qa_reasons`. Passing the producers lets a model's verdict on its OWN row
+            # count as a blocker rather than as one half of a corroboration pair.
+            reasons = qa_reasons(flagged, shipped_values(src, man), qagate.FLOOR,
+                                 producers=qa.producers(),
+                                 corroboration=qagate.defect_corroboration())
+            # Make a no-op visible. This pass once matched nothing because the review file
+            # is keyed by pair, not by source, and it still reported success per family;
+            # the two counts side by side turn that class of silent failure into something
+            # a log shows.
+            print(f'qa review: {len(flagged)} flagged pairs, '
+                  f'{len(reasons)} sources actionable', flush=True)
+        # A repair is invisible to this selector until the manifest is resealed, because
+        # the staleness guard in `qa_reasons` compares a verdict against the SEALED value
+        # and a repair writes to the translation memory. So a second repair pass over the
+        # same seal re-translates every row the first pass already fixed, at full cost,
+        # reporting success both times. Measured today: a 3-pass loop with no reseal
+        # between passes would have re-done all 9723 actionable sources twice.
+        #
+        # The cycle the engine intends is reseal -> select once -> repair -> reseal. This
+        # makes deviating from it harmless instead of expensive: every source repaired
+        # since the last seal is recorded, and skipped until a seal makes it judgeable
+        # again. `manifest.build` clears the record, because after a seal the selector can
+        # see the new value for itself.
+        already = repaired_since_seal()
+        if already:
+            skipped = [en for en in reasons if en in already]
+            if skipped:
+                print(f'qa review: skipping {len(skipped)} source(s) already repaired '
+                      f'since the last seal - reseal the manifest to judge them',
+                      flush=True)
+                reasons = {en: r for en, r in reasons.items() if en not in already}
         todo = []
         seen = set()
         for it in src[args.family]:
@@ -226,6 +398,10 @@ def main(argv=None):
                                     'reason': 'validation failed'} for k in failed}
             tmdb.update(got)
             save_json_locked(shard, got, what='the translation memory shard')
+            if args.qafail and got:
+                # A repair, not a first translation: remember it so a second pass over the
+                # same seal skips it instead of paying for it again.
+                note_repaired(got)
             save_json_locked(config.out(f'prov_{args.family}.json'), prov,
                              what='the provenance shard')
             # Which enforced contract did this row pass under? Without it an anchor
