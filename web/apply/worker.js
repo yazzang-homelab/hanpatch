@@ -150,21 +150,28 @@ out = _scratch + '/out/patched' + _ext
 os.makedirs(_scratch + '/out', exist_ok=True)
 
 from hanpatch import release
-info = release.inspect(_scratch + '/bundle.hpk')
-print(f"번들: {info['title']} ({info['target']}) / "
-      f"{info['entries']}개 문자열 / 매니페스트 {info['digest'][:16]}")
+bundle_info = release.inspect(_scratch + '/bundle.hpk')
+print(f"번들: {bundle_info['title']} ({bundle_info['target']}) / "
+      f"{bundle_info['entries']}개 문자열 / 매니페스트 {bundle_info['digest'][:16]}")
 if _mode == 'luma':
     # 실기용: 컨테이너를 다시 만들지 않는다. 바뀐 파일만 SD 카드 배치로 낸다.
     pack_dir = _scratch + '/out/layeredfs'
     r = release.luma(_scratch + '/bundle.hpk', _rom, out=pack_dir,
                      force=_force, workdir=work)
-    import zipfile
-    out = _scratch + '/out/' + f"{info['title']} ({info['target']}) LayeredFS.zip"
+    import time, zipfile
+    out = _scratch + '/out/' + f"{bundle_info['title']} ({bundle_info['target']}) LayeredFS.zip"
+    stamp = time.localtime()[:6]
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for base, _d, files in os.walk(pack_dir):
             for name in sorted(files):
                 p = os.path.join(base, name)
-                z.write(p, os.path.relpath(p, pack_dir))
+                # 파일에서 시각을 읽지 않는다. 브라우저 저장소에는 시각이 없고,
+                # zipfile 은 1980 이전 값을 거부한다.
+                zip_info = zipfile.ZipInfo(os.path.relpath(p, pack_dir)
+                                           .replace(os.sep, '/'), stamp)
+                zip_info.compress_type = zipfile.ZIP_DEFLATED
+                with open(p, 'rb') as fh:
+                    z.writestr(zip_info, fh.read())
     print(f"{out} " f"{len(r['files'])}개 파일, "
           f"{os.path.getsize(out) / 1e6:.1f} MB (압축)")
     r['out'] = out
@@ -172,16 +179,16 @@ if _mode == 'luma':
     r['reproduced'] = True
     r['expected'] = None
     r['layeredfs'] = True
-    r['source_expected'] = info.get('source_sha256')
-    r['title'] = info['title']
-    r['target'] = info['target']
+    r['source_expected'] = bundle_info.get('source_sha256')
+    r['title'] = bundle_info['title']
+    r['target'] = bundle_info['target']
 else:
     r = release.apply(_scratch + '/bundle.hpk', _rom, out=out, force=_force,
                       workdir=work)
-    r['expected'] = info.get('output_sha256')
-    r['source_expected'] = info.get('source_sha256')
-    r['title'] = info['title']
-    r['target'] = info['target']
+    r['expected'] = bundle_info.get('output_sha256')
+    r['source_expected'] = bundle_info.get('source_sha256')
+    r['title'] = bundle_info['title']
+    r['target'] = bundle_info['target']
 json.dumps(r)
 `);
   } catch (e) {

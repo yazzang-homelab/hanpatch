@@ -2650,6 +2650,27 @@ try:
 finally:
     config.source_only_re = _sb_ruby_prev
 
+# A donation target belongs to whoever deploys the book. Undeclared means the
+# header link and the index callout do not exist at all - a book that asks a
+# stranger's readers for money is worse than one with no link.
+_dn_prev = os.environ.pop('HANPATCH_DONATE_URL', None)
+try:
+    case('no donate target means no donate markup',
+         _sb.donate_url() == '' and 'btn donate' not in _sb.page('t', '', ''))
+    os.environ['HANPATCH_DONATE_URL'] = '/dq7/donate.html'
+    _dn_page = _sb.page('t', '', '')
+    case('a declared donate target renders one header link',
+         _dn_page.count('<a class="btn donate" href="/dq7/donate.html">') == 1)
+    case('the donate callout carries the same target',
+         '/dq7/donate.html' in _sb.donate_intro())
+    os.environ['HANPATCH_DONATE_URL'] = '" onmouseover="x'
+    case('a donate target is escaped into the attribute',
+         'onmouseover="x' not in _sb.page('t', '', ''))
+finally:
+    os.environ.pop('HANPATCH_DONATE_URL', None)
+    if _dn_prev is not None:
+        os.environ['HANPATCH_DONATE_URL'] = _dn_prev
+
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')
 _sp_prev = config.root()

@@ -213,6 +213,9 @@ gap:14px;align-items:center;flex-wrap:wrap}
 .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);
 padding:5px 11px;border-radius:4px;font:inherit;font-size:13px;cursor:pointer}
 .btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.donate{background:var(--accent);color:#fff;border-color:var(--accent);
+text-decoration:none;display:inline-block;line-height:1.5}
+.btn.donate:hover{text-decoration:none;opacity:.9}
 input[type=search]{border:1px solid var(--line);background:var(--panel);
 padding:6px 10px;border-radius:4px;font:inherit;font-size:13px;min-width:210px}
 .layout{max-width:1180px;margin:0 auto;padding:0 20px;display:flex;gap:28px;align-items:flex-start}
@@ -269,6 +272,43 @@ color:var(--dim);font-style:normal}
 nav.toc a.cur i{color:#fff}
 body.scope-story .sec:not([data-kind=story]),
 body.scope-storyfield .sec[data-kind=rules]{display:none}
+/* reader feedback + global search (inert without fb.js) */
+.fbbar{display:flex;gap:6px;align-items:center;margin-top:9px;
+border-top:1px dashed var(--line);padding-top:7px}
+.fbb,.fbv{border:1px solid var(--line);background:#f5eeda;color:var(--dim);
+font:12px/1.4 inherit;padding:3px 9px;border-radius:99px;cursor:pointer}
+.fbb:hover,.fbv:hover{border-color:var(--accent);color:var(--accent)}
+.fbb.has{color:var(--accent);border-color:var(--accent);background:#f8e6cf}
+.fbv.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.fbpanel{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.fbnote{background:#f5eeda;border:1px solid var(--line);border-radius:5px;
+padding:8px 10px;margin:0 0 8px;font-size:13px}
+.fbnote .who{font-size:11px;color:var(--dim);margin-bottom:3px}
+.fbnote .sug{border-left:3px solid var(--accent);padding-left:7px;margin-top:5px;
+color:#5c4326}
+.fbnote .done{color:#2f6b3a;font-size:11px}
+.fbform{display:flex;flex-direction:column;gap:6px}
+.fbform select,.fbform input,.fbform textarea{border:1px solid var(--line);
+background:#fff;color:var(--ink);font:inherit;font-size:13px;padding:6px 8px;
+border-radius:4px;width:100%}
+.fbform textarea{min-height:64px;resize:vertical}
+.fbrow{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.fbrow .grow{flex:1}
+.fbhp{position:absolute;left:-9999px;width:1px;height:1px}
+.fbmsg{font-size:12px;color:var(--accent)}
+.fbsend{border:1px solid var(--accent);background:var(--accent);color:#fff;
+font:inherit;font-size:13px;padding:6px 14px;border-radius:4px;cursor:pointer}
+.fbmini{font-size:11px;color:var(--dim)}
+#fbsearch{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+padding:10px 13px;margin:0 0 16px}
+#fbsearch h4{margin:0 0 8px;font-size:13px;font-weight:700}
+#fbsearch .hit{border-top:1px solid var(--line);padding:8px 0}
+#fbsearch .hit:first-of-type{border-top:0}
+#fbsearch .hit .sec{font-size:11px;color:var(--dim)}
+#fbsearch .hit .ko{font-size:14px}
+#fbsearch .hit .en{font-size:12px;border:0;margin:2px 0 0;padding:0}
+#fbsearch .more{margin-top:8px}
+.row.flash{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:900px){nav.toc{display:none}.layout{padding:0 14px}
 .readbar{position:static;flex-wrap:wrap}}
 @media print{header,nav.toc,.noprint{display:none}.layout{display:block;max-width:none}
@@ -288,7 +328,12 @@ JS = r"""
  var saved='both';try{saved=localStorage.getItem('csb-mode')||'both'}catch(e){}
  mode(saved);
  var q=document.getElementById('q');
- if(q){var t;q.addEventListener('input',function(){clearTimeout(t);t=setTimeout(run,140)});}
+ // With the search API present, `fb.js` owns this box and searches the whole
+ // book. Filtering the current page as well would hide every row behind the
+ // result list for any query whose line lives on another page - which, at 371
+ // pages, is nearly every query.
+ if(q&&!window.HPFB_API){var t;
+   q.addEventListener('input',function(){clearTimeout(t);t=setTimeout(run,140)});}
  function run(){
    var s=q.value.trim().toLowerCase();
    var units=document.querySelectorAll('.row,tbody tr');
@@ -367,6 +412,250 @@ JS = r"""
 """
 
 
+def feedback_intro(total):
+    return """
+<h2>번역이 이상한 대사를 신고하는 방법</h2>
+<div class="row"><div class="ko">
+<p>대사 블록마다 아래에 <b>의견</b> · <b>공감</b> 버튼이 있습니다. <b>의견</b>을 누르면
+그 대사에 달린 다른 독자의 지적이 보이고, 어떤 부분이 어떻게 이상한지 적어 보낼 수
+있습니다. 문제 종류(오역 · 어색함 · 오타 · 이름 표기 · 줄바꿈 깨짐 · 말투)를 고르고,
+고칠 문장을 직접 제안할 수도 있습니다. 같은 지적에 <b>공감</b>을 누르면 우선순위가
+올라갑니다.</p>
+<p>이름은 적지 않아도 됩니다. 보낸 의견은 수정 작업에 묶이기 전까지 <b>내 의견 지우기</b>로 지울 수
+있습니다.</p>
+<p>검색창은 <b>전체 대본 {total}개 대사</b>를 한 번에 찾습니다. 단어 일부만 넣어도 되고,
+원문·번역 어느 쪽이든 걸립니다. 결과를 누르면 그 대사가 있는 쪽으로 바로 이동합니다.</p>
+<p>모인 의견은 사람이 직접 검토해서 수정 작업지시서로 묶습니다. 지적이 바로 패치에
+반영되지는 않습니다.</p>
+</div></div>
+""".format(total=total)
+
+
+def donate_intro():
+    return """
+<h2>후원</h2>
+<div class="row"><div class="ko">
+<p>이 대본집과 한글패치는 혼자 만들고 혼자 고칩니다. 보내주신 의견을 하나하나
+확인해서 반영하는 일도 같은 사람이 합니다. 도움이 되었다면
+<a href="{url}"><b>커피 한잔 후원 &rarr;</b></a>으로 응원해 주세요.</p>
+<p>후원은 전부 자율이고, 후원하지 않아도 대본집과 패치는 그대로 전부 공개됩니다.
+의견을 보내는 것도 후원과 무관하게 언제나 환영합니다.</p>
+</div></div>
+""".format(url=esc_attr(donate_url()))
+
+
+# Reader-facing feedback and whole-book search. Loaded only when an API base is
+# configured, and every DOM insert goes through textContent: the panel prints
+# text other readers wrote, so it must never be able to print markup.
+FB_JS = r"""
+(function(){
+ if(!window.HPFB_API){return}
+ var API=HPFB_API, KINDS=HPFB_KINDS;
+ function el(t,c,txt){var e=document.createElement(t);if(c)e.className=c;
+  if(txt!=null)e.textContent=txt;return e}
+ function get(u){return fetch(API+u,{credentials:'omit'}).then(function(r){return r.json()})}
+ function post(u,b){return fetch(API+u,{method:'POST',credentials:'omit',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
+  .then(function(r){return r.json()})}
+ function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);
+  localStorage.setItem(k,v)}catch(e){return null}}
+
+ // ---------------------------------------------------------------- rows
+ var rows=[].slice.call(document.querySelectorAll('.row[data-key]'));
+ var byKey={};
+ rows.forEach(function(r){byKey[r.dataset.fam+'/'+r.dataset.key]=r;bar(r)});
+
+ function bar(r){
+  var b=el('div','fbbar noprint');
+  var c=el('button','fbb');c.appendChild(el('span',null,'의견 '));
+  var cn=el('b',null,'0');c.appendChild(cn);
+  var v=el('button','fbv');v.appendChild(el('span',null,'공감 '));
+  var vn=el('b',null,'0');v.appendChild(vn);
+  if(ls('fbv:'+r.id)==='1')v.classList.add('on');
+  b.appendChild(c);b.appendChild(v);
+  b.appendChild(el('span','fbmini','번역이 이상하면 알려 주세요'));
+  r.appendChild(b);
+  r._cn=cn;r._vn=vn;
+  c.addEventListener('click',function(){toggle(r)});
+  v.addEventListener('click',function(){
+   post('/vote',{sec:r.dataset.fam,key:r.dataset.key}).then(function(d){
+    if(d.error)return;vn.textContent=d.votes;
+    var on=v.classList.toggle('on');ls('fbv:'+r.id,on?'1':'0')})});
+ }
+
+ function counts(){
+  var fams={};rows.forEach(function(r){fams[r.dataset.fam]=1});
+  Object.keys(fams).slice(0,12).forEach(function(f){
+   get('/section?sec='+encodeURIComponent(f)).then(function(d){
+    Object.keys(d.counts||{}).forEach(function(k){
+     var r=byKey[f+'/'+k];if(!r)return;
+     var n=d.counts[k].n||0;r._cn.textContent=n;r._vn.textContent=d.counts[k].v||0;
+     if(n)r.querySelector('.fbb').classList.add('has')})}).catch(function(){})})
+ }
+ counts();
+
+ function toggle(r){
+  if(r._panel){r._panel.remove();r._panel=null;return}
+  var p=el('div','fbpanel');r._panel=p;r.appendChild(p);
+  p.appendChild(el('div','fbmini','불러오는 중…'));
+  get('/line?sec='+encodeURIComponent(r.dataset.fam)+'&key='+
+      encodeURIComponent(r.dataset.key)).then(function(d){
+   p.innerHTML='';
+   (d.items||[]).forEach(function(it){p.appendChild(note(it))});
+   if(!(d.items||[]).length)
+    p.appendChild(el('div','fbmini','아직 의견이 없습니다. 이 대사의 번역에서 어떤 부분이 이상한지 적어 주세요.'));
+   p.appendChild(form(r,p));
+  }).catch(function(){p.innerHTML='';
+   p.appendChild(el('div','fbmsg','불러오지 못했습니다.'))});
+ }
+
+ function note(it){
+  var n=el('div','fbnote');
+  var who=el('div','who',(it.nick||'이름 없음')+' · '+
+   (KINDS[it.kind]||it.kind)+' · '+(it.created||'').replace('T',' ').replace('Z',''));
+  n.appendChild(who);
+  n.appendChild(el('div',null,it.body));
+  if(it.suggest)n.appendChild(el('div','sug','이렇게 바꾸면 어떨까요: '+it.suggest));
+  if(it.fixed)n.appendChild(el('div','done','✓ 반영됨'));
+  else if(it.taken)n.appendChild(el('div','done','✓ 확인함 · 수정 대기'));
+  var tok=ls('fbt:'+it.id);
+  if(tok&&!it.fixed){
+   var del=el('button','fbb','내 의견 지우기');
+   del.addEventListener('click',function(){
+    post('/retract',{id:it.id,token:tok}).then(function(d){
+     if(d.error)return alert(d.message||d.error);n.remove()})});
+   var w=el('div','fbrow');w.appendChild(del);n.appendChild(w)}
+  return n;
+ }
+
+ function form(r,p){
+  var f=el('div','fbform');
+  var kind=el('select');
+  var o0=el('option',null,'어떤 종류의 문제인가요?');o0.value='';kind.appendChild(o0);
+  Object.keys(KINDS).forEach(function(k){
+   var o=el('option',null,KINDS[k]);o.value=k;kind.appendChild(o)});
+  var body=el('textarea');
+  body.placeholder='이 대사의 번역에서 어떤 부분이 이상한지 구체적으로 적어 주세요.';
+  body.maxLength=1000;
+  var sug=el('input');sug.placeholder='(선택) 이렇게 바꾸면 어떨까요';sug.maxLength=600;
+  var nick=el('input');nick.placeholder='(선택) 이름';nick.maxLength=24;
+  nick.value=ls('fbnick')||'';
+  var hp=el('input','fbhp');hp.tabIndex=-1;hp.setAttribute('aria-hidden','true');
+  var send=el('button','fbsend','보내기');
+  var msg=el('div','fbmsg');
+  var row=el('div','fbrow');row.appendChild(nick);
+  var g=el('span','grow');row.appendChild(g);row.appendChild(send);
+  f.appendChild(kind);f.appendChild(body);f.appendChild(sug);f.appendChild(hp);
+  f.appendChild(row);f.appendChild(msg);
+  send.addEventListener('click',function(){
+   msg.textContent='';
+   if(!kind.value){msg.textContent='문제 종류를 골라 주세요.';return}
+   if(body.value.trim().length<2){msg.textContent='내용을 적어 주세요.';return}
+   send.disabled=true;
+   post('/feedback',{sec:r.dataset.fam,key:r.dataset.key,kind:kind.value,
+    body:body.value,suggest:sug.value,nick:nick.value,hp:hp.value})
+   .then(function(d){
+    send.disabled=false;
+    if(d.error){msg.textContent=d.message||d.error;return}
+    if(d.token)ls('fbt:'+d.id,d.token);
+    if(nick.value)ls('fbnick',nick.value);
+    r._panel.remove();r._panel=null;
+    var n=+r._cn.textContent||0;r._cn.textContent=n+1;
+    r.querySelector('.fbb').classList.add('has');
+    toggle(r);
+   }).catch(function(){send.disabled=false;
+    msg.textContent='보내지 못했습니다. 잠시 뒤에 다시 시도해 주세요.'});
+  });
+  return f;
+ }
+
+ // ------------------------------------------------------- whole-book search
+ var q=document.getElementById('q');
+ var main=document.querySelector('main');
+ var box=null,t=null,state={q:'',off:0};
+ function panel(){
+  if(box)return box;
+  box=el('div','noprint');box.id='fbsearch';
+  main.insertBefore(box,main.firstChild.nextSibling);
+  return box;
+ }
+ function render(d,append){
+  var b=panel();
+  if(!append){b.innerHTML='';
+   b.appendChild(el('h4',null,'전체 대본 검색 · “'+d.q+'” '+d.total+'건'));
+   if(d.match==='terms')
+    b.appendChild(el('div','fbmini','문장이 그대로 있는 줄은 없어서, 단어를 많이 '
+     +'포함한 줄부터 보여 드립니다. 사람 이름이나 아이템 이름처럼 게임이 실행 중에 '
+     +'끼워 넣는 자리는 대본에 {HERO} 같은 태그로 들어 있어서, 화면에서 본 문장과 '
+     +'글자까지 똑같지는 않습니다. 검색한 단어: '+(d.terms||[]).join(', ')));}
+  else{var m=b.querySelector('.more');if(m)m.remove()}
+  d.hits.forEach(function(h){
+   var w=el('div','hit');
+   w.appendChild(el('div','sec',h.section+' · '+h.fam+'/'+h.key+
+    (h.score?' · 일치한 단어 '+h.matched.join(' '):'')+
+    (h.n?' · 의견 '+h.n:'')));
+   var a=el('a');a.href=h.page.indexOf('#')>=0?h.page:h.page+'#'+h.anchor;
+   a.appendChild(el('div','ko',h.ko.replace(/\s+/g,' ').slice(0,180)));
+   w.appendChild(a);
+   w.appendChild(el('div','en',h.src.replace(/\s+/g,' ').slice(0,180)));
+   b.appendChild(w)});
+  if(d.offset+d.hits.length<d.total){
+   var more=el('div','more');
+   var mb=el('button','btn','다음 '+Math.min(40,d.total-d.offset-d.hits.length)+'건 더 보기');
+   mb.addEventListener('click',function(){run(state.q,d.offset+d.hits.length,true)});
+   more.appendChild(mb);b.appendChild(more)}
+  if(!d.total&&!append)
+   b.appendChild(el('div','fbmini','검색 결과가 없습니다.'));
+ }
+ function run(s,off,append){
+  state.q=s;
+  get('/search?q='+encodeURIComponent(s)+'&offset='+(off||0)+'&limit=40')
+   .then(function(d){render(d,append)}).catch(function(){});
+ }
+ if(q){
+  q.addEventListener('input',function(){
+   clearTimeout(t);
+   var s=q.value.trim();
+   if(!s){if(box){box.remove();box=null}return}
+   t=setTimeout(function(){run(s,0,false)},260);
+  });
+  var pre=new URLSearchParams(location.search).get('q');
+  if(pre){q.value=pre;run(pre,0,false)}
+ }
+
+ // deep link from a search hit: make the landing row obvious
+ function flash(){
+  var id=location.hash.slice(1);if(!id)return;
+  var r=document.getElementById(id);if(!r||!r.classList)return;
+  r.classList.add('flash');
+  setTimeout(function(){r.classList.remove('flash')},2600);
+ }
+ window.addEventListener('hashchange',flash);flash();
+})();
+"""
+
+
+def fb_api():
+    """Base URL of the feedback/search API, or '' for a plain static book.
+
+    Deployment fact, not a title fact, so it lives in `hanpatch.json` (or the
+    env) rather than in the profile the gates validate.
+    """
+    return (config.cfg().get('feedback_api')
+            or os.environ.get('HANPATCH_FEEDBACK_API') or '').rstrip('/')
+
+
+def donate_url():
+    """Where the header's support link points, or '' for no link at all.
+
+    A deployment fact like `feedback_api`: the book is generated for whoever hosts
+    it, and a donation target hard-coded here would follow the book to hosts that
+    never agreed to collect money. Empty means the link is not rendered.
+    """
+    return (config.cfg().get('donate_url')
+            or os.environ.get('HANPATCH_DONATE_URL') or '').strip()
+
+
 def esc(s):
     return html.escape(s, quote=False)
 
@@ -406,6 +695,10 @@ def ruby(s):
     out.append(esc(s[pos:]))
     return ''.join(out)
 
+def esc_attr(s):
+    """`esc` keeps quotes readable in prose, which is wrong inside an attribute."""
+    return html.escape(s, quote=True)
+
 
 def paras(s, cls):
     render = ruby if cls == 'en' else esc
@@ -414,6 +707,11 @@ def paras(s, cls):
 
 
 def page(title, toc, body, subtitle='', extra_head=''):
+    # The config script loads FIRST so `app.js` can see that the search box
+    # belongs to the API, and `fb.js` reads the same globals.
+    if fb_api():
+        extra_head += '\n<script src="fbcfg.js"></script>'
+    fb = ('<script src="fb.js"></script>' if fb_api() else '')
     return f"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -424,11 +722,12 @@ def page(title, toc, body, subtitle='', extra_head=''):
 <header><div class="hwrap">
 <div class="brand">{esc(book_name())} 대본집<small>{esc(book_name_en())} · KOREAN SCRIPT BOOK</small></div>
 <div class="grow"></div>
-<input type="search" id="q" placeholder="원문·번역 검색">
+<input type="search" id="q" placeholder="{'전체 대본에서 검색 (단어 일부도 됩니다)' if fb_api() else '원문·번역 검색'}">
 <span id="cnt" style="font-size:12px;color:var(--dim)"></span>
 <button class="btn" data-mode="both">대역</button>
 <button class="btn" data-mode="ko">한국어</button>
 <button class="btn" data-mode="en">English</button>
+{f'<a class="btn donate" href="{esc_attr(donate_url())}">☕ 후원하기</a>' if donate_url() else ''}
 </div></header>
 <div class="layout">
 <nav class="toc">{toc}</nav>
@@ -436,7 +735,7 @@ def page(title, toc, body, subtitle='', extra_head=''):
 {body}
 <footer>ROM 원문 + 한글패치 봉인 매니페스트에서 자동 생성. 게임 데이터 자체는 포함하지 않습니다.</footer>
 </main></div>
-<script src="app.js"></script></body></html>"""
+<script src="app.js"></script>{fb}</body></html>"""
 
 
 def book_name():
@@ -458,6 +757,15 @@ def book_name_en():
 # page that a browser cannot usefully display. The threshold is a size decision, not a title
 # fact, so it lives here rather than in a profile.
 PAGE_ROW_LIMIT = 4000
+
+
+def row_anchor(fam, key):
+    """Deep-link target for a single row, shared with the search index.
+
+    `hanpatch.feedback.row_anchor` calls this, so a search hit and the rendered
+    row can never disagree about the fragment.
+    """
+    return 'r-' + slug(fam) + '--' + slug(key)
 
 
 def slug(sid):
@@ -524,7 +832,9 @@ def build():
                f'<span style="font-size:13px;color:var(--dim)">'
                f'{esc(sec["title_en"])}</span></h2>']
         for key, en, ko in sec['rows']:
-            out.append(f'<div class="row"><span class="k">{esc(key)}</span>'
+            out.append(f'<div class="row" id="{row_anchor(sid, key)}" '
+                       f'data-fam="{esc(sid)}" data-key="{esc(key)}">'
+                       f'<span class="k">{esc(key)}</span>'
                        f'{paras(ko, "ko")}{paras(en, "en")}</div>')
         out.append(nav)
         out.append('</section>')
@@ -590,7 +900,9 @@ def build():
         ab.append('<table><thead><tr><th>KEY</th><th class="ko">한국어</th>'
                   '<th class="en">English</th></tr></thead><tbody>')
         for key, en, ko in rows:
-            ab.append(f'<tr><td class="key">{esc(key)}</td>'
+            ab.append(f'<tr id="{row_anchor(family, key)}" '
+                      f'data-fam="{esc(family)}" data-key="{esc(key)}">'
+                      f'<td class="key">{esc(key)}</td>'
                       f'<td class="ko">{esc(clean(ko, False))}</td>'
                       f'<td class="en">{ruby(clean(en, False))}</td></tr>')
         ab.append('</tbody></table>')
@@ -629,6 +941,8 @@ def build():
 번역문을 동시에 찾습니다.</p>
 <p><a href="story.html"><b>본문 차례로 이동 →</b></a></p>
 </div></div>
+{feedback_intro(n_story + n_field) if fb_api() else ''}
+{donate_intro() if donate_url() else ''}
 <h2>구성</h2>
 <table><thead><tr><th>구분</th><th class="ko">내용</th><th>분량</th></tr></thead><tbody>
 <tr><td class="key">story.html</td><td class="ko">묶음별 차례 (묶음마다 한 쪽)</td><td>{len(sections)}</td></tr>
@@ -720,6 +1034,13 @@ def build():
 
     open(f'{OUT}/style.css', 'w').write(CSS)
     open(f'{OUT}/app.js', 'w').write(JS)
+    if fb_api():
+        from hanpatch import feedback as fbmod
+        with open(f'{OUT}/fbcfg.js', 'w', encoding='utf-8') as fh:
+            fh.write('var HPFB_API=%s;\nvar HPFB_KINDS=%s;\n' % (
+                json.dumps(fb_api()), json.dumps(fbmod.KINDS, ensure_ascii=False)))
+        with open(f'{OUT}/fb.js', 'w', encoding='utf-8') as fh:
+            fh.write(FB_JS)
     open(f'{OUT}/robots.txt', 'w').write('User-agent: *\nDisallow: /\n')
     return {'sections': len(sections), 'story': n_story, 'field': n_field,
             'appendix': n_app, 'digest': digest}

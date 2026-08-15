@@ -13,6 +13,13 @@
     hanpatch book    [--out DIR]
     hanpatch all
 
+    hanpatch feedback index              index the book for whole-book search
+    hanpatch feedback serve              reader feedback API + loopback triage
+    hanpatch feedback orders             work orders and their approval state
+    hanpatch feedback show ORD           print one work order
+    hanpatch feedback approve ORD --by N approve an order (a human act)
+    hanpatch feedback apply ORD --fixes F  write approved fixes into the override
+
     hanpatch keys                        show loaded key material
     hanpatch release --out patch.hpk     bundle the translation for distribution
     hanpatch apply patch.hpk --rom ROM   rebuild someone else's copy
@@ -22,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 from hanpatch import config
 from hanpatch import star
@@ -167,6 +175,91 @@ def cmd_verify(args):
 def cmd_book(args):
     from hanpatch import scriptbook
     return scriptbook.main(args.out) or 0
+
+
+def _fbstore(args):
+    from hanpatch import feedback
+    return feedback.Store(args.db or config.p('work', 'feedback.db'))
+
+
+def _fborders(args):
+    return args.orders or config.p('work', 'orders')
+
+
+def cmd_feedback(args):
+    from hanpatch import feedback
+    store = _fbstore(args)
+    op = args.op
+    if op == 'index':
+        n = feedback.index_from_book(store)
+        _p(f'indexed {n} rows -> {store.path}')
+        return 0
+    if op == 'serve':
+        if not store.stat()['lines']:
+            _p('the search index is empty; run `hanpatch feedback index` first')
+            return 1
+        token = ''
+        if args.token_file and os.path.exists(args.token_file):
+            token = open(args.token_file, encoding='utf-8').read().strip()
+        elif args.token_file:
+            _p(f'no such token file: {args.token_file}')
+            return 1
+        srv, admin = feedback.serve(store, args.port, args.admin_port, args.host,
+                                   token, _fborders(args))
+        _p(f'public  http://{args.host}:{args.port}/api/')
+        if admin:
+            _p(f'admin   http://{args.host}:{args.admin_port}/'
+               + ('  (token required)' if token else '  (no token set)'))
+        _p(f'orders  {_fborders(args)}')
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            srv.shutdown()
+            if admin:
+                admin.shutdown()
+        return 0
+    if op == 'orders':
+        for o in store.orders():
+            _p(f'{o["id"]}  {o["status"]:<8} {o["approved_by"] or "-":<12} '
+               f'{o["title"]}')
+        return 0
+    if op == 'show':
+        row = store.order(args.id)
+        if row is None:
+            _p(f'no such order: {args.id}')
+            return 1
+        _p(feedback.order_md(json.loads(row['payload'])))
+        return 0
+    if op == 'approve':
+        try:
+            p = store.approve_order(args.id, args.by, _fborders(args))
+        except ValueError as e:
+            _p(str(e))
+            return 1
+        _p(f'{p["id"]} approved by {p["approved_by"]} '
+           f'({len(p["rows"])} rows) -> {_fborders(args)}')
+        return 0
+    if op == 'apply':
+        if not args.fixes:
+            _p('--fixes is required: a JSON object of {"family/key": "new text"}')
+            return 1
+        fixes = config.load_object(args.fixes, 'the fix set')
+        bad = [k for k, v in fixes.items() if not isinstance(v, str)]
+        if bad:
+            _p(f'--fixes holds non-text values for: {", ".join(sorted(bad))}')
+            return 1
+        res = feedback.apply_order(store, args.id, fixes, _fborders(args))
+        if not res['ok']:
+            _p(f'REFUSED: {res["error"]}')
+            for pb in res.get('problems', [])[:25]:
+                _p(f'  {pb}')
+            return 1
+        _p(f'applied {res["applied"]} overrides -> {res["override"]}')
+        _p('run `hanpatch gates` to re-seal the manifest, then rebuild the book.')
+        return 0
+    _p(f'unknown feedback op: {op}')
+    return 2
 
 
 def cmd_keys(args):
@@ -359,6 +452,23 @@ def main(argv=None):
     s = sub.add_parser('book', help='render the bilingual script book')
     s.add_argument('--out')
     s.set_defaults(fn=cmd_book)
+
+    s = sub.add_parser('feedback', help='reader feedback, search index, work orders')
+    s.add_argument('op', choices=['index', 'serve', 'orders', 'show', 'approve',
+                                 'apply'])
+    s.add_argument('id', nargs='?', help='work order id')
+    s.add_argument('--db', help='default: work/feedback.db')
+    s.add_argument('--orders', help='where approved orders are written '
+                                    '(default: work/orders)')
+    s.add_argument('--host', default='127.0.0.1')
+    s.add_argument('--port', type=int, default=8120)
+    s.add_argument('--admin-port', type=int,
+                   help='serve the loopback triage surface on this port too')
+    s.add_argument('--token-file',
+                   help='shared secret the triage surface requires')
+    s.add_argument('--by', help='who approves this order; recorded in it')
+    s.add_argument('--fixes', help='JSON object of {"family/key": "new text"}')
+    s.set_defaults(fn=cmd_feedback)
 
     s = sub.add_parser('keys', help='show loaded key material')
     s.set_defaults(fn=cmd_keys)

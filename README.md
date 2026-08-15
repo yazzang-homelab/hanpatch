@@ -134,7 +134,15 @@ hanpatch gates                       # 게이트 전부 실행 후 매니페스�
 hanpatch build --out dist/patched.cia
 hanpatch verify                      # 빌드된 ROM을 다시 읽어 검증
 hanpatch book --out build/scriptbook  # 대역 스크립트북 디렉터리 (검수용, 기본값 build/scriptbook)
+
+hanpatch feedback index               # 대본 전체를 검색 색인에 넣는다 (부분 일치)
+hanpatch feedback serve --admin-port 8121   # 독자 피드백 API + 루프백 처리 화면
+hanpatch feedback apply ORD --fixes f.json  # 사람이 승인한 지시서만 반영
 ```
+
+독자가 이상한 번역을 대사마다 지적하게 하고, 그 지적을 사람이 승인한 수정 지시서로만
+번역에 반영하는 경로는 [docs/feedback.md](docs/feedback.md) 에 있다. 에이전트가 독자
+의견을 읽고 자율로 번역을 고치는 경로는 없다.
 
 `hanpatch all`은 `fonts + gates + build + verify`를 한 번에 돌린다. `translate`는 재개
 가능하므로 중단해도 다시 실행하면 남은 샤드만 처리한다. 검증에 실패한 행을 다시 돌릴 때는
