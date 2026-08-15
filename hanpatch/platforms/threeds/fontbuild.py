@@ -67,7 +67,10 @@ def font_spec():
         face = config.p(per_font[name]) if name in per_font else ttf
         if not os.path.exists(face):
             raise SystemExit(f'font {name!r} renders from {face}, which does not exist')
-        spec[name] = (face, size, CRISP)
+        crisp = (config.prof('font_crisp') or {}).get(name, CRISP)
+        if not isinstance(crisp, bool):
+            raise SystemExit(f'font_crisp[{name!r}] must be true or false, got {crisp!r}')
+        spec[name] = (face, size, crisp)
     return spec
 
 # The sheets are RGBA4444: A is ink coverage and RGB is a shading mask that the
@@ -247,9 +250,18 @@ def render_hangul(ch, font, cell_w, cell_h, baseline, px_size, lut=None,
         h = y1 - y0
         # centre horizontally inside the advance box, keep vertical position
         crop = tmp.crop((x0, 0, x1, tmp.height))
-        # target: ink starts at floor((advance - w)/2)
+        # Ink NEVER starts at cell column 0. Measured on the shipped fonts: all
+        # 7109 tbud_maru_b16 glyphs and 965 iwamaru_p15 glyphs start their ink
+        # at column >= 1, and cells baked at column 0 render with their left
+        # edge shaved on hardware (operator report 2026-08-15: every glyph's
+        # left tip slightly cut). The engine does not draw the cell's first
+        # column faithfully, so the original fonts avoid it; new glyphs must
+        # honour the same convention. The fit measurement therefore budgets
+        # ink width against cell_w - 1, not cell_w.
         adv = cell_w - 1
-        dx = max(0, (adv - w) // 2)
+        dx = max(1, (adv - w) // 2)
+        if dx + w > cell_w:
+            dx = max(1, cell_w - w)
         cov.paste(crop.crop((0, pad, w, pad + cell_h)), (dx, 0))
         gw = min(cell_w, dx + w)
         left = 0
