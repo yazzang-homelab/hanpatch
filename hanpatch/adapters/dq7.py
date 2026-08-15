@@ -396,6 +396,7 @@ class DragonQuest7(adapter.Adapter):
                              f'consumed, e.g. {list(left)[:5]}')
 
         self._apply_fonts(stage)
+        self._apply_assets(stage)
 
         image = config.p('build', 'romfs.bin')
         # Reproduce the cartridge's own entry order, captured from its own image.
@@ -414,11 +415,92 @@ class DragonQuest7(adapter.Adapter):
         # release that ships one is unplayable no matter how good the text is.
         threeds.rebuild(
             rom, image, out, keystore=self._keystore(),
-            exefs_replacements={'.code': self._prefilled_code()},
+            exefs_replacements=self._exefs_replacements(),
             decrypt=bool(config.prof('decrypt_output')))
         stats['size'] = os.path.getsize(out)
         stats['container'] = threeds.detect(out)
         return stats
+
+    def _exefs_replacements(self):
+        """ExeFS members this build swaps: the prefilled code plus declared blobs.
+
+        The home-menu banner lives in the ExeFS, not the RomFS, so `assets` cannot
+        reach it - a localisation that stops at the RomFS ships a Japanese banner on
+        real hardware even though every line inside the game is Korean.
+
+        Declared per title in `exefs_replace`, for the same reason `assets` is
+        declared: an ExeFS member is code or signed metadata as often as it is
+        artwork, and guessing which ones are safe to overwrite is how a build bricks
+        a title. A declared member that is absent from the source ExeFS is refused
+        rather than added.
+        """
+        out = {'.code': self._prefilled_code()}
+        for name, src in sorted((config.prof('exefs_replace') or {}).items()):
+            path = config.p(src)
+            adapter.require(path, f'ExeFS member {name}')
+            with open(path, 'rb') as fh:
+                out[name] = fh.read()
+            print(f'  exefs {name} <- {src} ({len(out[name])} bytes)')
+        return out
+
+    @staticmethod
+    def _materialize(stage, *parts):
+        """Make `stage/parts...` writable without following a symlink out of stage.
+
+        `_stage_romfs` symlinks every directory the patch does not rewrite, so an
+        open('wb') on a path under one of those links lands in the EXTRACTED tree
+        and silently corrupts the source of every later build - that is exactly
+        how extracted/romfs shipped a garbled title band for three releases.
+        Directory components that are symlinks are replaced by real directories
+        whose entries are symlinks one level down; a final component that is a
+        symlink is removed so the caller's write creates a real file.
+        """
+        path = stage
+        for comp in parts[:-1]:
+            path = os.path.join(path, comp)
+            if os.path.islink(path):
+                real = os.path.realpath(path)
+                os.unlink(path)
+                os.makedirs(path)
+                for entry in sorted(os.listdir(real)):
+                    os.symlink(os.path.join(real, entry),
+                               os.path.join(path, entry))
+        final = os.path.join(path, parts[-1])
+        if os.path.islink(final):
+            real = os.path.realpath(final)
+            os.unlink(final)
+            shutil.copyfile(real, final)
+        return final
+
+    def _apply_assets(self, stage):
+        """Replace declared non-text RomFS members with rebuilt ones.
+
+        Text and fonts are not the only language-bearing artwork on a cartridge:
+        DQ7 draws its title subtitle from a texture atlas inside a model archive,
+        so a localisation that stops at text ships a Japanese title screen. The
+        replacement is DECLARED per title in the profile rather than discovered,
+        because guessing which members are safe to overwrite is how a build
+        silently corrupts geometry.
+
+        Each entry maps a RomFS-relative path to a project file. The member must
+        already exist in the extracted image: creating a new RomFS entry would
+        change the directory the game's own file table was built against.
+        """
+        assets = config.prof('assets') or {}
+        for rel, src in sorted(assets.items()):
+            path = config.p(src)
+            adapter.require(path, f'rebuilt asset {rel}')
+            target = os.path.join(stage, *rel.split('/'))
+            if not os.path.exists(target):
+                raise SystemExit(
+                    f'INJECT BLOCKED: {rel} is not a member of the extracted RomFS, '
+                    f'so replacing it would add an entry the cartridge never had')
+            target = self._materialize(stage, *rel.split('/'))
+            with open(path, 'rb') as fh:
+                data = fh.read()
+            with open(target, 'wb') as fh:
+                fh.write(data)
+            print(f'  asset {rel} <- {src} ({len(data)} bytes)')
 
     def _chars_absent_from_source(self, entries):
         """Characters the manifest uses that the extracted source never did.
@@ -476,7 +558,7 @@ class DragonQuest7(adapter.Adapter):
         written = 0
         for name, data in sorted(built.items()):
             for arc, member in slots[name]:
-                dst = os.path.join(stage, LAYOUT_DIR, arc)
+                dst = self._materialize(stage, LAYOUT_DIR, arc)
                 with open(dst, 'rb') as fh:
                     blob = fh.read()
                 with open(dst, 'wb') as fh:
