@@ -262,6 +262,9 @@ export function makeOpfsFs(FS, PATH, ERRNO_CODES, bridge, prefix = '') {
   // 않으면 매 빌드마다 기가바이트를 옮겨야 한다. 스크래치는 실행마다 비우므로
   // 링크 표는 메모리에만 둔다.
   const links = new Map();   // 절대 경로 -> 대상 경로
+  // OPFS 는 시각을 보관하지 않는다. 0(1970)을 돌려주면 이 파일들을 다루는 코드가
+  // 걸린다 — zipfile 은 1980 이전 타임스탬프를 거부한다(실측). 이 세션 시각을 준다.
+  const now = new Date();
 
   // 마운트 루트의 parent 는 자기 자신이다. 즉 노드 사슬만으로는 마운트 지점의
   // 이름을 알 수 없어 트리가 OPFS 루트에 그대로 쏟아진다(실측: work/, out/ 이
@@ -286,7 +289,7 @@ export function makeOpfsFs(FS, PATH, ERRNO_CODES, bridge, prefix = '') {
         return {
           dev: 1, ino: node.id, mode: linkMode, nlink: 1, uid: 0, gid: 0,
           rdev: 0, size: target.length,
-          atime: new Date(0), mtime: new Date(0), ctime: new Date(0),
+          atime: now, mtime: now, ctime: now,
           blksize: 4096, blocks: 1,
         };
       }
@@ -294,7 +297,7 @@ export function makeOpfsFs(FS, PATH, ERRNO_CODES, bridge, prefix = '') {
         return {
           dev: 1, ino: node.id, mode: fileMode, nlink: 1, uid: 0, gid: 0,
           rdev: 0, size: node._size,
-          atime: new Date(0), mtime: new Date(0), ctime: new Date(0),
+          atime: now, mtime: now, ctime: now,
           blksize: 4096, blocks: Math.ceil(node._size / 4096),
         };
       }
@@ -305,7 +308,7 @@ export function makeOpfsFs(FS, PATH, ERRNO_CODES, bridge, prefix = '') {
         dev: 1, ino: node.id, mode: st.isDir ? dirMode : fileMode,
         nlink: 1, uid: 0, gid: 0, rdev: 0,
         size: st.isDir ? 4096 : st.size,
-        atime: new Date(0), mtime: new Date(0), ctime: new Date(0),
+        atime: now, mtime: now, ctime: now,
         blksize: 4096, blocks: Math.ceil(st.size / 4096),
       };
     },

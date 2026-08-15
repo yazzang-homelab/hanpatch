@@ -257,6 +257,12 @@ DEFAULT_PROFILE = {
     # Needed because promotion cannot be inferred from orthography: CJK is
     # caseless, so a kana/kanji term is never `isupper()`.
     'hard_terms': [],
+    # What the engine puts on screen where a row carries a substitution token,
+    # e.g. {'{HERO}': '아루스'}. Used ONLY to make the script book searchable by
+    # what a player saw; the shipped text keeps the token. Empty means the title
+    # has not measured its substitutions, and an unlisted token is dropped from
+    # the search rendering rather than guessed at.
+    'placeholder_text': {},
     # Substitution tokens whose rendered text is FIXED - a party member whose
     # Korean name the player cannot change, e.g. {'{KEAFA}': '키파'}. This is the
     # only fact that lets a Korean particle after the token be resolved to one
