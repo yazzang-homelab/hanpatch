@@ -1483,6 +1483,41 @@ case('the injector refuses a translation containing a line break',
          os.path.join(ROOT, 'hanpatch', 'adapters', 'dq7.py'), encoding='utf-8').read())
 
 print()
+print('== etc1: the compressed textures DQ7 draws its title artwork from ==')
+from hanpatch.formats import etc1 as _etc1
+
+_etc1_w = _etc1_h = 8
+# One 8x8 tile: four 4x4 blocks, each 8 colour bytes then 8 alpha bytes.
+_etc1_payload = bytes(range(64))
+case('a payload half the pixel count is ETC1, a payload equal to it is ETC1A4',
+     _etc1.bits_per_pixel(32, 8, 8) == 4 and _etc1.bits_per_pixel(64, 8, 8) == 8)
+case('any other density is refused rather than guessed',
+     raises(lambda: _etc1.bits_per_pixel(40, 8, 8), 'neither ETC1'))
+_etc1_img = _etc1.decode(_etc1_payload, _etc1_w, _etc1_h)
+case('an ETC1A4 payload decodes to one RGBA image of the declared size',
+     _etc1_img.size == (8, 8) and _etc1_img.mode == 'RGBA')
+case('re-encoding an unmodified decode reproduces the payload byte for byte',
+     _etc1.encode(_etc1_img, _etc1_payload, _etc1_w, _etc1_h) == _etc1_payload)
+_etc1_edit = _etc1_img.copy()
+_etc1_edit.putpixel((0, 0), (255, 0, 0, 255))
+_etc1_new = _etc1.encode(_etc1_edit, _etc1_payload, _etc1_w, _etc1_h)
+case('editing one pixel rewrites only the block that holds it',
+     len(_etc1_new) == len(_etc1_payload)
+     and _etc1_new[16:] == _etc1_payload[16:]
+     and _etc1_new[:16] != _etc1_payload[:16])
+_etc1_back = _etc1.decode(_etc1_new, _etc1_w, _etc1_h)
+case('the edited pixel survives the round trip as opaque red',
+     _etc1_back.getpixel((0, 0))[3] == 255
+     and _etc1_back.getpixel((0, 0))[0] > _etc1_back.getpixel((0, 0))[2])
+case('every pixel outside the edited block is unchanged',
+     all(_etc1_back.getpixel((x, y)) == _etc1_img.getpixel((x, y))
+         for x in range(8) for y in range(8) if not (x < 4 and y < 4)))
+case('a replacement of the wrong size is refused, because the layout that '
+     'references the texture is elsewhere',
+     raises(lambda: _etc1.encode(_etc1_img.resize((16, 16)), _etc1_payload,
+                                 _etc1_w, _etc1_h), 'replacement is'))
+
+print()
 print(f'{len(PASS)} passed, {len(FAIL)} failed')
 for f in FAIL:
     print('  FAILED:', f)
