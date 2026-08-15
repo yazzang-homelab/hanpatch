@@ -235,6 +235,15 @@ def codex_judges():
     return [f'codex{a}:{CODEX_MODEL}' for a in providers.codex_accounts()]
 
 
+# Claude accounts that recorded verdicts on this box and are no longer present under
+# `/root/.claude-accounts`. Discovery-by-directory is right for CALLING an account and wrong
+# for RECOGNISING one: when `lee2` was removed from disk its 680 recorded verdicts became
+# `unknown judge` and 231 pairs lost the coverage those calls had already paid for - the same
+# failure retirement avoids by keeping identity while refusing new calls. Listing the account
+# here restores only the identity; `RESERVED_JUDGE_PREFIXES` still refuses to call it.
+DEPARTED_CLAUDE_ACCOUNTS = ('lee2',)
+
+
 def claude_judges():
     """One lane per Claude account per model, accounts outermost.
 
@@ -242,8 +251,13 @@ def claude_judges():
     per-model-first order would spend the whole first model on one account's quota before
     touching the others. Two models across N accounts is 2 identities and 2N lanes - the
     identities are what the release rule counts, the lanes are what carries throughput.
+
+    Accounts that have left the box are included: the list feeds the identity set, and a
+    verdict is evidence of a call that was made, not of an account that still exists.
     """
-    return [f'claude{a}:{m}' for a in providers.claude_accounts() for m in CLAUDE_MODELS]
+    accounts = list(providers.claude_accounts())
+    accounts += [a for a in DEPARTED_CLAUDE_ACCOUNTS if a not in accounts]
+    return [f'claude{a}:{m}' for a in accounts for m in CLAUDE_MODELS]
 
 
 def lane_model(lane_id):
