@@ -143,6 +143,16 @@ def main():
     for term, n in collide[:6]:
         print(f'      form mandated for {term!r} used in {n} unrelated strings')
 
+    decided_bad, decided_rows = decided_terms(src, man_entries or tmdb,
+                                              from_manifest=bool(man_entries))
+    if config.prof('decided_terms'):
+        print('=== reader decisions ===')
+        print(f'  decided runs: {len(config.prof("decided_terms"))}, '
+              f'rows carrying one: {decided_rows}')
+        print(f'  rows contradicting a decision: {len(decided_bad)}')
+        for row in decided_bad[:10]:
+            print(f'      {row}')
+
     print('=== terminology drift ===')
     drift = terminology_drift(src, tmdb)
     print(f'  near-identical source pairs with divergent Korean: {len(drift)}')
@@ -161,13 +171,63 @@ def main():
     # `hard_terms` only means "classified proper nouns" where a title took the trouble
     # to classify them; it is not a portable proxy for that. A title that wants these
     # fatal must say so, not inherit it silently.
-    hard_fail = (stats['untranslated'] + len(pending) +
+    hard_fail = (stats['untranslated'] + len(pending) + len(decided_bad) +
                  sum(len(v) for k, v in fails.items() if k != 'register-mixed'))
     print(f'  release bar: 0 untranslated, 0 unresolved reviews | advisory: '
           f'{len(incons)} inconsistent renderings, {len(collide)} name collisions')
     print(f'\nHARD FAILURES: {hard_fail}')
     LAST_EXAMINED = stats['total']
     return 1 if hard_fail else 0
+
+
+def decided_terms(src, values, from_manifest=True):
+    """Rows that contradict a wording a reader asked for and an operator approved.
+
+    General term consistency is advisory here for reasons the release-bar comment gives:
+    a mandated Korean form legitimately turns up in strings that do not carry the source
+    run, and making that fatal broke a released corpus. A DECIDED term is the opposite
+    case and is fatal, because the evidence is different in kind:
+
+      * it names one source run and one Korean form, both written down with the order
+        that decided them, so there is nothing to infer;
+      * it exists because a player reported the old wording from real hardware, which is
+        the one place none of the machine checks can see;
+      * and the failure it prevents is the one readers actually file - the name table
+        says one thing and the dialogue that names the item says another.
+
+    Measured on DQ7: three decisions (城下町, コック長, アミット漁) reversed an earlier
+    order, and applying them only to the 138 rows the order named would have left 196
+    other rows contradicting them. Nothing catches that but this.
+    """
+    decided = config.prof('decided_terms') or {}
+    if not decided:
+        return [], 0
+    bad, rows = [], 0
+    ruby = re.compile(r'\{\d+[^}]*\}')
+    for family, items in src.items():
+        for it in items:
+            en = it['en']
+            if tm.is_skip(en, it['key']) or not en.strip():
+                continue
+            ko = (values.get(f'{family}/{it["key"]}') if from_manifest
+                  else tm.lookup(values, en))
+            if not ko:
+                continue
+            flat = ruby.sub('', en)
+            for run, spec in decided.items():
+                if run not in flat:
+                    continue
+                rows += 1
+                want = spec['ko'] if isinstance(spec, dict) else spec
+                order = spec.get('order', '?') if isinstance(spec, dict) else '?'
+                # The stored value carries the container's own breaks, so a form that
+                # wrapped is still the form.
+                loose = re.compile(r'[\s\u3000;]*'.join(
+                    re.escape(c) for c in want if not c.isspace()))
+                if not loose.search(ko):
+                    bad.append(f'{family}/{it["key"]}: source has {run!r}, '
+                               f'{order} decided {want!r}, shipped {ko.strip()[:40]!r}')
+    return bad, rows
 
 
 def signature(en):

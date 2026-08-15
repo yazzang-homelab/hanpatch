@@ -2030,6 +2030,14 @@ for _ja, _ko, _want, _why in [
          'a propositive is plain'),
         ('ご案内します。', '이쪽', None,
          'a one-word fragment cannot carry a speech level and is not reported'),
+        # A mother waking her son. なさい commands a subordinate; it does not defer to the
+        # listener, and scoring it polite put Korean honorifics in a parent's mouth.
+        ('起きなさい！', '일어나렴!', None,
+         'なさい alone does not declare a polite source'),
+        ('ごめんなさい。', '미안', None,
+         'ごめんなさい does not declare a register either'),
+        ('早く行きなさい。ご案内します。', '어서 가라', 'plain',
+         'a real politeness marker in the same line still declares polite'),
 ]:
     _d = _reg.divergence(_ja, _ko)
     case(_why, (_d is None) if _want is None
@@ -2238,6 +2246,16 @@ case('automatic widening skips metered, parked, retired and reserved lanes',
 # Reserved is about the next call, not the evidence: those verdicts were already paid for.
 case('a reserved lane keeps its judge identity so recorded verdicts stay valid',
      'claudelee:sonnet' in _qamod.JUDGES)
+# An account can leave the box; the calls it already made cannot be unmade. Discovering
+# judge identity from the credentials directory turned 680 recorded verdicts into
+# `unknown judge` the moment `lee2` was removed, which is the same coverage collapse the
+# retirement rule exists to prevent.
+case('a departed Claude account keeps its judge identity',
+     all(f'claude{_a}:{_m}' in _qamod.JUDGES
+         for _a in _qamod.DEPARTED_CLAUDE_ACCOUNTS for _m in _qamod.CLAUDE_MODELS))
+case('a departed Claude account is still refused for new calls',
+     all(_qamod.reserved(f'claude{_a}:{_m}')
+         for _a in _qamod.DEPARTED_CLAUDE_ACCOUNTS for _m in _qamod.CLAUDE_MODELS))
 
 print('== the repair selector blocks on the same evidence as the gate ==')
 # If the selector is looser than the gate, every extra row it queues is a rewrite of text
@@ -2485,6 +2503,31 @@ case('a row with no sealed value is not in the book',
 case('the book prints the declared title, never another game\'s',
      _sb.book_name() == (config.prof('book_title_ko')
                          or config.cfg().get('title') or '한글화'))
+
+# A reader saw `{1@x}` in the published book: the source's reading annotations were
+# printed verbatim, and on a device with no Japanese font the reading degraded to
+# boxes. They are declared source-only, so the book must draw them as furigana.
+_sb_ruby_prev = config.source_only_re
+config.source_only_re = lambda: _sb.re.compile(r'\{[0-9]+[^}\n]*\}')
+try:
+    case('a reading annotation is drawn as furigana over the characters it counts',
+         _sb.ruby('漁{1りょう}の日{1ひ}')
+         == '<ruby>漁<rt>りょう</rt></ruby>の<ruby>日<rt>ひ</rt></ruby>')
+    case('a multi-character base takes exactly the declared character count',
+         _sb.ruby('城下町{3じょうかまち}から')
+         == '<ruby>城下町<rt>じょうかまち</rt></ruby>から')
+    case('an annotation with no reading is dropped rather than printed',
+         _sb.ruby('あ{2}い') == 'あい')
+    case('an annotation with no base to attach to is dropped, not misattributed',
+         _sb.ruby('{2あ}い') == 'い')
+    case('a runtime substitution token is not a reading annotation',
+         _sb.ruby('{HERO}と') == '{HERO}と')
+    case('markup is still escaped so the book cannot inject html',
+         _sb.ruby('<b>&') == '&lt;b&gt;&amp;')
+    case('the korean column never grows ruby markup',
+         _sb.paras('漁{1りょう}', 'ko') == '<div class="ko"><p>漁{1りょう}</p></div>')
+finally:
+    config.source_only_re = _sb_ruby_prev
 
 
 print('== the system prompt follows the declared facts, not a frozen assumption ==')

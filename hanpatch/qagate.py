@@ -52,7 +52,15 @@ WAIVER_CATEGORIES = {'JP_NAMING', 'ELEMENT_TERMS', 'OFFICIAL_HW_TERM',
                      # Sealed before any judge saw this exact translation. It claims only
                      # that nothing is known against the row, NOT that it was reviewed, so a
                      # later sweep can still find a defect here.
-                     'UNJUDGED_AT_SEAL'}
+                     'UNJUDGED_AT_SEAL',
+                     # The row says what a reader asked for and an operator approved, and
+                     # the panel is asking to undo it. This is not a judge being wrong and
+                     # not a style stalemate: it is a different authority, and the only one
+                     # of the two that has seen the game on real hardware. Repairing such a
+                     # row ships the exact wording the reader filed a complaint about, so
+                     # the disagreement is recorded instead. The reason line must name the
+                     # order, because that is what an auditor checks.
+                     'OPERATOR_ORDER'}
 
 
 def producers():
