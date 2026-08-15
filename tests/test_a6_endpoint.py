@@ -19,8 +19,13 @@ def test_a6_is_registered_as_a_keyed_endpoint():
 
 
 def test_every_keyed_endpoint_is_a_paid_lane():
+    # `deepseek` left this set on 2026-08-10: the prepaid direct account was retired
+    # by operator decision and the ENDPOINT was removed so a stale `--models
+    # deepseek:...` fails at pool build instead of quietly billing. The model itself
+    # stays reachable through `a6`. This test names the paid lanes that EXIST, not
+    # the ones that ever existed.
     keyed = {n for n, (_, kv, _) in P.ENDPOINTS.items() if kv}
-    assert keyed == {'deepseek', 'a6'}
+    assert keyed == {'a6'}
 
 
 def test_a6_is_not_in_the_free_default_pool():
