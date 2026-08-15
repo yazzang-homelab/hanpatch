@@ -371,9 +371,46 @@ def esc(s):
     return html.escape(s, quote=False)
 
 
+def ruby(s):
+    """Escaped HTML with the source's reading annotations drawn as real furigana.
+
+    The profile declares those annotations `source_only`: they exist to gloss the
+    source script and are expected to vanish in translation. The book was dumping
+    them verbatim, so a reader saw `漁{1りょう}` - and on a device with no Japanese
+    font, the reading degraded to boxes and the row read as `{1@x}`. That is the
+    markup leaking into the product, not a font problem to wave away.
+
+    The annotation counts the BASE characters it applies to: `{1りょう}` glosses the
+    single character in front of it, `城下町{3じょうかまち}` the three. Anything that
+    does not carry that count, or that has no base text to attach to, is dropped
+    rather than guessed at, because inventing a base would misattribute a reading.
+    """
+    pat = config.source_only_re()
+    if pat is None:
+        return esc(s)
+    out = []
+    pos = 0
+    for m in pat.finditer(s):
+        body = m.group(0)[1:-1]
+        digits = re.match(r'(\d+)', body)
+        reading = body[digits.end():] if digits else ''
+        n = int(digits.group(1)) if digits else 0
+        head = s[pos:m.start()]
+        if not n or not reading or len(head) < n:
+            out.append(esc(head))
+            pos = m.end()
+            continue
+        out.append(esc(head[:-n]))
+        out.append(f'<ruby>{esc(head[-n:])}<rt>{esc(reading)}</rt></ruby>')
+        pos = m.end()
+    out.append(esc(s[pos:]))
+    return ''.join(out)
+
+
 def paras(s, cls):
+    render = ruby if cls == 'en' else esc
     return f'<div class="{cls}">' + ''.join(
-        f'<p>{esc(p)}</p>' for p in flow(s)) + '</div>'
+        f'<p>{render(p)}</p>' for p in flow(s)) + '</div>'
 
 
 def page(title, toc, body, subtitle='', extra_head=''):
@@ -555,7 +592,7 @@ def build():
         for key, en, ko in rows:
             ab.append(f'<tr><td class="key">{esc(key)}</td>'
                       f'<td class="ko">{esc(clean(ko, False))}</td>'
-                      f'<td class="en">{esc(clean(en, False))}</td></tr>')
+                      f'<td class="en">{ruby(clean(en, False))}</td></tr>')
         ab.append('</tbody></table>')
     open(f'{OUT}/appendix.html', 'w').write(page(
         '부록 · 설정집', toc(), ''.join(ab),
