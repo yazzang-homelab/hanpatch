@@ -35,9 +35,18 @@ from hanpatch import config
 # ご案内します。' was scored as carrying both levels and therefore as declaring nothing.
 # A marker that fires on a politeness formula is worse than a missing marker.
 _END = r'[。！？\s」』）\)]'
+# `なさい` was listed here and was REMOVED after two independent reader reports on adjacent
+# lines. It is not deference toward the listener: it is the command form a superior uses
+# with someone below them - a mother waking her son, a cook telling a boy to get off the
+# boat. Scoring it polite made every parent address their child in Korean honorifics,
+# which is what the readers filed. Measured on this corpus: 422 rows carry it and in 361
+# of them it was the ONLY politeness marker, so those rows stop DECLARING a register and
+# fall back to the profile default. Nothing is rewritten by that: `divergence` is silent
+# where the source declares nothing, so this removes a wrong assertion rather than adding
+# a new one. `ください`, an actual request, stays.
 _POLITE = re.compile(
     r'(です|ます' + _END + r'|ます$|ました|ません|ましょう|でしょう|ございま|ください'
-    r'|ですか|であります|なさい)')
+    r'|ですか|であります)')
 _PLAIN = re.compile(
     r'(だぞ|だな|だよ|だろう|だぜ|だわ|じゃん|のだ|んだ|だ' + _END + r'|だ$'
     # `した` must not be the tail of the POLITE past `ました`: 「わかりました」 matched both
