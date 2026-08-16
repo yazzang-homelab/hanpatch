@@ -69,6 +69,44 @@ law where you live.
 """
 
 
+#: Profile keys whose values are PROJECT FILES the injector reads, not text. Both hold
+#: language-bearing artwork - DQ7 draws its title subtitle from a texture atlas and its
+#: home-menu banner from an ExeFS member - and neither was ever put in the bundle.
+PAYLOAD_KEYS = ('assets', 'exefs_replace')
+
+
+def _declared_payload():
+    """key -> {declared name: (path inside the bundle, path on this machine)}.
+
+    Refuses rather than skips a missing file. A bundle that omits one is not a smaller
+    bundle, it is a broken one: the recipient's `apply` dies at the injector with a path
+    that only exists on the machine that built it. Measured on the shipped DQ7 r3 bundle -
+    `hanpatch apply` failed for every reader with `missing rebuilt asset
+    CHARACTER/p0450.bcmdl.lz`, and the release had been signed and published.
+    """
+    payload = {}
+    for key in PAYLOAD_KEYS:
+        declared = config.prof(key) or {}
+        if not declared:
+            continue
+        mapping = {}
+        for name, src in sorted(declared.items()):
+            path = config.p(src)
+            if not os.path.exists(path):
+                raise SystemExit(
+                    f'refusing to release: the profile declares {key}[{name!r}] = {src!r} '
+                    f'and that file is missing ({path}). The injector reads it on the '
+                    f'RECIPIENT\'s machine, so a bundle without it cannot be applied.')
+            where = f'payload/{key}/{name.replace("/", "_")}'
+            if any(where == w for w, _ in mapping.values()):
+                raise SystemExit(
+                    f'refusing to release: two {key} entries flatten to the same bundle '
+                    f'path {where!r}; rename one of them in the profile.')
+            mapping[name] = (where, path)
+        payload[key] = mapping
+    return payload
+
+
 def create(out=None, rom=None, built=None, notes=None):
     """Write a release bundle from the current project state."""
     cfg = config.cfg()
@@ -100,15 +138,22 @@ def create(out=None, rom=None, built=None, notes=None):
     }
 
     fonts = [config.p(x) for x in config.prof('font_out')]
+    payload = _declared_payload()
+    profile = dict(config.profile())
+    for key, mapping in payload.items():
+        profile[key] = {name: where for name, (where, _src) in mapping.items()}
     ext = os.path.splitext(rom)[1] or '.cia'
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr('bundle.json', json.dumps(info, indent=1, ensure_ascii=False))
         z.writestr('manifest.json', json.dumps(doc, ensure_ascii=False))
-        z.writestr('profile.json', json.dumps(config.profile(), indent=1,
+        z.writestr('profile.json', json.dumps(profile, indent=1,
                                               ensure_ascii=False))
         for f in fonts:
             if os.path.exists(f):
                 z.write(f, f'fonts/{os.path.basename(f)}')
+        for mapping in payload.values():
+            for where, src in mapping.values():
+                z.write(src, where)
         z.writestr('README.txt', README.format(
             title=cfg['title'], target=config.lang_name(),
             rule='=' * 60, bundle=os.path.basename(out), ext=ext,

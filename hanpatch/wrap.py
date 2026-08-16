@@ -99,6 +99,63 @@ def assert_layout_declared(source_max_width=None):
             f'looks like. A budget is the width of the BOX. Measure it - a '
             f'screenshot and one glyph-advance ratio is enough - and record where '
             f'the number came from in `budget_measured`.')
+
+
+#: A family's own widest source line is a LOWER BOUND on its box: the container
+#: drew that line, so the box is at least that wide. `EVIDENCE_RATIO` is how far a
+#: declared budget may sit above that bound before the declaration stops being about
+#: this family's box at all. Two is not a tuning knob - it is the point where the
+#: profile claims a box more than twice as wide as anything the container has ever
+#: drawn, which no authoring style explains.
+EVIDENCE_RATIO = 2
+#: Below this many measured lines the maximum is noise, not a bound: a table of
+#: three short rows says nothing about how wide its box is.
+EVIDENCE_LINES = 20
+
+
+def assert_budget_matches_evidence(evidence):
+    """Refuse a family that inherited the width of a box it never renders in.
+
+    `evidence` maps family -> (widest source line in px, number of measured lines).
+
+    Only for a container that lays out its own text. There the stored lines ARE the
+    display lines, every one of them was authored to fit this family's box, and the
+    widest of them is therefore evidence about THAT box. Where the engine wraps, a
+    stored row is not a display line and this comparison would mean nothing.
+
+    The defect this exists for shipped: DQ7's profile gave every `#` family the
+    278px it had measured from the dialogue box, including `#845000` and `#846000` -
+    the spell and item description panels, whose own 512 and 1112 source lines never
+    exceed 104px and 119px. Against 278px the wrapper never found a line to break,
+    so 570 descriptions went out as one long line each and ran outside the panel on
+    a real console, with every gate reporting the corpus clean. Nothing else could
+    have caught it: the text fits the width it was measured against, and the width
+    was declared, just for a different box.
+    """
+    # The accessor returns the declared `engine_wraps`: True means the ENGINE wraps and
+    # a stored row is not a display line, so there is nothing here to compare against a
+    # box. None means undeclared, which `engine_lays_out` already refuses.
+    if title_lays_out_own_text() is not False:
+        return
+    resolved = _budget(BUDGET)
+    contradicted = sorted(
+        (family, width, resolved.get(family, resolved['default']))
+        for family, (width, lines) in evidence.items()
+        if lines >= EVIDENCE_LINES and width > 0
+        and width * EVIDENCE_RATIO < resolved.get(family, resolved['default']))
+    if not contradicted:
+        return
+    named = ', '.join(f'{family} (widest source line {width:.0f}px, budget {budget}px)'
+                      for family, width, budget in contradicted[:6])
+    raise SystemExit(
+        f'these containers lay out their own text and have been given a budget more '
+        f'than {EVIDENCE_RATIO}x their own widest source line: {named}. That is the '
+        f'signature of a family inheriting another box\'s width. Measure each one and '
+        f'declare its own `budget`, or declare the shared width deliberately - there '
+        f'is no default here, because a translation measured against a box it is not '
+        f'drawn in passes the layout gate and overflows on the device.')
+
+
 # Tags that substitute a runtime value and therefore render glyphs. Every other
 # tag is a zero-width control tag: it must not keep a space alive at the start
 # of a line, while `<num1> 이상` must.
@@ -345,6 +402,15 @@ def rewrap(s, budget, soft=False):
     the box is emitted whole and overflows: `overlong_units` reports it and the
     gate refuses the row. Splitting it instead is how the old loop turned an
     unfittable word into a break in the middle of a word with no problem raised.
+
+    No line ends in a space, INCLUDING the last. A space at the end of a line is
+    not layout - nothing renders there - and leaving one on the final line made
+    this function's output depend on whether its input ended in a newline:
+    `soften` turns the source's terminal `\n` into a space, so the first pass
+    baked that space into the value and `normalise_ja_layout` stripped it on the
+    next. Measured on DQ7: 3751 of 14004 sampled rows changed under a second
+    `translate.check`, which is what the audit gate reports as normalisation
+    drift, and every one of them differed by exactly that one space.
     """
     if soft:
         s = soften(s)
@@ -388,8 +454,7 @@ def rewrap(s, budget, soft=False):
         started = started or bool(unit_width(unit)) or any(
             k == 't' for k, _v in unit)
     txt = ''.join(out)
-    txt = re.sub(r' +\n', '\n', txt)
-    return txt
+    return re.sub(r' +(\n|$)', r'\1', txt)
 
 
 def pages(s):

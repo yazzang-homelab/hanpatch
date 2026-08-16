@@ -398,6 +398,29 @@ _ORPHAN_SPACE = re.compile(r'[ \u3000\t\n]+(?=['
                            + re.escape(''.join(wrap.NO_LINE_START)) + r'])')
 
 
+def _tag_pieces(text):
+    """`text` as [(is_tag, piece)], safe for a title pattern that captures.
+
+    `re.split` on a wrapped pattern returns one element per group, so a profile whose
+    `tag_pattern` spells its alternatives as `(<...>)|(\\{...\\})` - which is a normal way
+    to write it - yielded each tag three times and rejoining the pieces DUPLICATED every
+    tag in the string. The passes below then returned that as the repaired value, and
+    nothing noticed, because the tag-multiset check runs before them. It took running the
+    rules twice over their own output to surface it: on the second pass the multiset had
+    quadrupled. Walking matches is immune to how the title chose to group its pattern.
+    """
+    out = []
+    last = 0
+    for match in TAG_RE.finditer(text):
+        if match.start() > last:
+            out.append((False, text[last:match.start()]))
+        out.append((True, match.group()))
+        last = match.end()
+    if last < len(text):
+        out.append((False, text[last:]))
+    return out
+
+
 def normalise_punctuation(ko):
     """Korean punctuation for a Japanese source, with no doubled sentence end.
 
@@ -414,10 +437,8 @@ def normalise_punctuation(ko):
     if source_lang() != 'ja' or not ko:
         return ko
     out = []
-    for piece in re.split(f'({TAG_RE.pattern})', ko):
-        if not piece:
-            continue
-        if TAG_RE.fullmatch(piece):
+    for is_tag, piece in _tag_pieces(ko):
+        if is_tag:
             out.append(piece)
             continue
         piece = _FW_PUNCT_RE.sub(lambda m: _FW_PUNCT[m.group()], piece)
@@ -438,10 +459,8 @@ def normalise_ja_layout(en, ko):
     if source_lang() != 'ja' or not ko:
         return ko
     out = []
-    for piece in re.split(f'({TAG_RE.pattern})', ko):
-        if not piece:
-            continue
-        if TAG_RE.fullmatch(piece):
+    for is_tag, piece in _tag_pieces(ko):
+        if is_tag:
             out.append(piece)
             continue
         # A run of padding is one word gap, never a hole.
@@ -453,8 +472,47 @@ def normalise_ja_layout(en, ko):
     return '\n'.join(line.strip(' \t') for line in ko.split('\n'))
 
 
+# How many times the normalising passes may run before the value must be stable.
+# Two is what convergence needs in every measured case (one pass to normalise, one
+# to prove nothing moved); the extra headroom exists so a rule that only becomes
+# reachable after the wrapper joined two lines still converges instead of being
+# reported as a defect. A value that is still moving at the cap is a rule conflict
+# and is reported rather than shipped - picking whichever side the loop happened to
+# stop on is how a build ships text its own rules disagree with.
+_NORMALISE_PASSES = 4
+
+
 def check(en, ko, gl, kind='default', group=None):
-    """Return (rewrapped_ko, problems). problems == [] means valid."""
+    """Return (normalised_ko, problems) at a FIXED POINT of the rules.
+
+    `_check_once` both validates and repairs, and some repairs only become
+    reachable after an earlier one moved the text: `normalise_punctuation` runs
+    before the wrapper, so a `…` ending one display line and the `.` opening the
+    next are not adjacent until `soften` has joined them, and `josa.weld_after_tags`
+    is the same story for a particle the previous wrap pushed onto its own line.
+    A single pass therefore returns a value that the NEXT pass would still change.
+
+    That is not cosmetic. The audit gate demands `check(sealed) == sealed`, because
+    a rule added after a seal was written is otherwise invisible - `check` quietly
+    repairs the string and audit throws the repair away. A non-idempotent `check`
+    makes that demand unsatisfiable, so the corpus can never go green and the gate
+    stops meaning anything. Iterating here is what makes the sealed value and the
+    rules agree.
+    """
+    value = ko
+    for _ in range(_NORMALISE_PASSES):
+        result, problems = _check_once(en, value, gl, kind, group)
+        if problems:
+            return result, problems
+        if result == value:
+            return result, []
+        value = result
+    return value, [f'normalisation did not settle in {_NORMALISE_PASSES} passes; '
+                   f'two rules are undoing each other on this row']
+
+
+def _check_once(en, ko, gl, kind='default', group=None):
+    """One pass of validate-and-repair. Callers want `check`, which iterates."""
     problems = []
     if not ko or not ko.strip():
         return ko, ['empty']

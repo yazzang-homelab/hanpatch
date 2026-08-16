@@ -24,6 +24,31 @@ def group(family, key):
     return f'{family}/{g}'
 
 
+def _per_family_evidence(src):
+    """family -> (widest measured source line in px, number of measured lines).
+
+    Measured means the rows this derivation actually walks: a row the engine lays
+    out is not a display line, so counting it would compare a budget against text
+    nobody stores line by line.
+    """
+    evidence = {}
+    for family, items in src.items():
+        widest = 0.0
+        lines = 0
+        for it in items:
+            en = it['en'] or ''
+            if not en.strip() or wrap.engine_lays_out(en):
+                continue
+            for line in en.split('\n'):
+                if not line.strip():
+                    continue
+                lines += 1
+                widest = max(widest, wrap.text_width(line))
+        if lines:
+            evidence[family] = (widest, lines)
+    return evidence
+
+
 def build(src_path=None):
     src_path = src_path or config.src_path()
     src = json.load(open(src_path))
@@ -48,6 +73,11 @@ def build(src_path=None):
     source_max = (max((wrap.text_width(line) for line in measured), default=0)
                   if measured and wrap.have_font() else None)
     wrap.assert_layout_declared(source_max)
+    # The same evidence, kept per family. A title-wide maximum cannot see a family
+    # that was handed another box's width, because the widest line in the corpus
+    # belongs to the widest box in the game.
+    if wrap.have_font():
+        wrap.assert_budget_matches_evidence(_per_family_evidence(src))
     for family, items in src.items():
         budget = wrap.budget_for(family)
         for it in items:

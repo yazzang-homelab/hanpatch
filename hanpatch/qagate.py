@@ -93,10 +93,64 @@ def record_problem(rec, en, ko):
         return f'score out of range a={rec["a"]} f={rec["f"]}'
     if rec['en'] != en or rec['ko'] != ko:
         return 'verdict does not carry the judged pair'
+    carry = carried_problem(rec, en)
+    if carry is not None:
+        return carry
     if not str(rec['judge']).strip():
         return 'no judge recorded'
     if rec['judge'] not in JUDGES:
         return f'unknown judge {rec["judge"]!r}'
+    return None
+
+
+#: The field that makes a record CLAIM its `ko` is not the string the judge read. Its
+#: presence is what turns on the checks below; `carried_from` alone does not, because the
+#: ledger already holds 307669 records that name a source pair while still storing the exact
+#: text they were judged on, and those are ordinary verdicts by every rule that applies here.
+CARRY_CLAIM = 'ko_judged'
+#: Required once that claim is made. A half-written carry must block rather than read as an
+#: ordinary verdict.
+CARRY_FIELDS = ('carried_from', CARRY_CLAIM, 'carried_ruleset')
+
+
+def carried_problem(rec, en):
+    """None when a carried verdict's claimed inheritance holds, else why it does not.
+
+    A carried record is filed under the value the pipeline DERIVES from the text the judge
+    actually saw, so `record_problem`'s pair check alone would no longer prove the record
+    belongs where it sits. Two things restore that:
+
+      * the record must name the text it was judged on, and that text must hash to the pair
+        it says it came from. A record cannot claim an inheritance from a pair that never
+        existed.
+      * the derivation was proven under a specific ruleset, and a ruleset change can make
+        it false. Rather than re-derive 61114 rows inside a gate on every run, the carry
+        stamps the ruleset it proved under and this refuses a stamp that is no longer
+        current - `hanpatch.qacarry` then re-proves them all in one pass.
+    """
+    from hanpatch import manifest as manmod
+    if CARRY_CLAIM not in rec:
+        return None
+    missing = [f for f in CARRY_FIELDS if f not in rec]
+    if missing:
+        return f'incomplete carried verdict, missing {", ".join(missing)}'
+    judged = rec[CARRY_CLAIM]
+    if not isinstance(judged, str):
+        return 'carried verdict does not record the text that was judged'
+    if rec['carried_from'] != qamod.pair_key(en, judged):
+        return 'carried verdict does not name the pair it was judged under'
+    if rec['carried_ruleset'] != manmod.RULESET:
+        return (f'carried under ruleset {rec["carried_ruleset"]}, current is '
+                f'{manmod.RULESET}; re-run `python -m hanpatch.qacarry --apply`')
+    # The weaker ground is cheap to re-prove from the record alone, so it is re-proved on
+    # every run rather than trusted from the stamp. It has to be: the rule tightened once -
+    # whitespace used to be deleted rather than collapsed, which made a missing space look
+    # like a moved one - and every carry made under the looser reading was still sitting in
+    # the ledger afterwards, one of them a spacing defect carried onto the fixed spelling.
+    if rec.get('carried_by') == 'wording' and (
+            qamod.wording_key(en, judged) != qamod.wording_key(en, rec['ko'])):
+        return ('carried on wording identity that no longer holds; re-run '
+                '`python -m hanpatch.qacarry --apply`')
     return None
 
 
