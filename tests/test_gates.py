@@ -38,12 +38,18 @@ from hanpatch import qa as qamod  # noqa: E402
 from hanpatch import qagate  # noqa: E402
 from hanpatch import qarelabel  # noqa: E402
 from hanpatch import qapurge  # noqa: E402
+from hanpatch import qacarry  # noqa: E402
 from hanpatch import star as _starmod  # noqa: E402
 from hanpatch import tm  # noqa: E402
 from hanpatch import wrap as _wrap  # noqa: E402
 from hanpatch import audit as _ad_audit  # noqa: E402
 from hanpatch import translate as tr  # noqa: E402
 from hanpatch import wrap  # noqa: E402
+
+#: A real measurement font, borrowed from the reference project when it is built. Layout
+#: and carry rules cannot be exercised without one - `text_width` needs glyph advances.
+_EW_FONT_EARLY = '/mnt/ssd256/m0a-crimson/work/ko/font_text.bcfnt'
+_HAVE_EW_FONT_EARLY = os.path.exists(_EW_FONT_EARLY)
 
 HAVE_CORPUS = (os.path.exists(config.src_path())
                and os.path.exists(config.out('manifest.json'))
@@ -517,6 +523,225 @@ case('a pair with nothing but damage is dropped, not left empty',
      qapurge.purge({_PK: [_rec(a=70)]}) == {})
 case('purging is idempotent',
      not qapurge.plan(qapurge.purge({_PK: [_rec(a=70), _rec()]}))[0])
+
+# Discovery-by-directory is right for CALLING an account and wrong for RECOGNISING one.
+# When `codex3` left the disk it took 98,707 recorded verdicts out of the identity set with
+# it, and the next reseal had the gate reject 26,719 shipped pairs as `unknown judge` -
+# coverage those calls had already paid for. The Claude side already had this list; the
+# Codex side did not, and the two are the same rule.
+case('a departed judge account keeps its identity',
+     all(f'codex{a}:{qamod.CODEX_MODEL}' in qamod.JUDGES
+         for a in qamod.DEPARTED_CODEX_ACCOUNTS))
+def _pool_with(spec):
+    prev = os.environ.get('HANPATCH_QA_MODELS')
+    os.environ['HANPATCH_QA_MODELS'] = spec
+    try:
+        return qamod.active_judges()
+    finally:
+        if prev is None:
+            os.environ.pop('HANPATCH_QA_MODELS', None)
+        else:
+            os.environ['HANPATCH_QA_MODELS'] = prev
+
+
+_departed_lane = next((lane for lane in qamod.JUDGES if qamod.departed(lane)), None)
+if _departed_lane:
+    # Identity and runtime are separate lists. Naming an account that is not on the box is
+    # refused with a diagnostic rather than handed to a provider factory that returns None.
+    case('a departed account is refused as a runtime lane, not silently dropped',
+         _prov_refuses(lambda: _pool_with(_departed_lane), 'departed judge lane'))
+else:
+    skip('departed judge lane refusal (every listed account is present on this box)')
+
+# A verdict is filed under the exact pair a judge saw, so a reseal that only re-applies
+# the pipeline's own deterministic passes orphans it - measured on DQ7 when the
+# description panels got their own budgets: 61114 of 78642 sealed rows lost their verdict
+# without a single word being rewritten. `qacarry` moves a verdict only when running
+# today's full ruleset over the exact string that was judged reproduces the sealed string,
+# which is a proof rather than a similarity.
+_carry_root = tempfile.mkdtemp(prefix='hanpatch-qacarry-')
+
+
+def _carry_fixture(sealed, judged, en='a b\nc d\n'):
+    """A one-row project whose ledger holds `judged` and whose manifest ships `sealed`."""
+    json.dump({'title': 'c', 'platform': 'threeds', 'adapter': 'crimson_shroud',
+               'target': 'ko', 'profile': 'p.json'},
+              open(os.path.join(_carry_root, config.PROJECT_FILE), 'w'))
+    prof = {'budget': {'default': 64}, 'capacity': {'fam': 4}, 'engine_wraps': False}
+    if _HAVE_EW_FONT_EARLY:
+        prof['font_src'] = [_EW_FONT_EARLY]
+        prof['font_out'] = [_EW_FONT_EARLY]
+    json.dump(prof, open(os.path.join(_carry_root, 'p.json'), 'w'))
+    os.makedirs(os.path.join(_carry_root, 'work', 'ko'), exist_ok=True)
+    json.dump({'fam': [{'key': 'k1', 'en': en, 'jp': ''}]},
+              open(os.path.join(_carry_root, 'work', 'text_src.json'), 'w'),
+              ensure_ascii=False)
+    entries = {'fam/k1': sealed}
+    json.dump({'ruleset': manmod.RULESET, 'generated': '', 'count': 1,
+               'digest': manmod.digest(entries), 'entries': entries},
+              open(os.path.join(_carry_root, 'work', 'ko', 'manifest.json'), 'w'),
+              ensure_ascii=False)
+    doc = {qamod.pair_key(en, judged):
+           [_rec(judge=j, en=en, ko=judged) for j in _qamod.JUDGES[:2]]}
+    json.dump(doc, open(os.path.join(_carry_root, 'work', 'ko', 'qa.json'), 'w'),
+              ensure_ascii=False)
+    return doc
+
+
+def _carry_plan(sealed, judged, en='a b\nc d\n'):
+    doc = _carry_fixture(sealed, judged, en)
+    _prev = config.root()
+    config.set_root(_carry_root)
+    try:
+        return doc, qacarry.plan(doc)[0]
+    finally:
+        if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+            config.set_root(_prev)
+
+
+if _HAVE_EW_FONT_EARLY:
+    # Whitespace moved: the wrapper put the break somewhere else.
+    _doc, _moves = _carry_plan('\uac00\ub098\n\ub2e4\ub77c\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    case('a verdict carries onto the value the rules derive from the judged text',
+         len(_moves) == 1)
+    _carried = qacarry.carry(_doc, _moves) if _moves else 0
+    _moved = _doc[_moves[0][2]] if _moves else []
+    case('the carried record names the pair it was inherited from',
+         _carried == 2 and all(rec.get('carried_from') == _moves[0][1]
+                               for rec in _moved))
+    # Filed under the pair being SHIPPED, with the judged text kept verbatim beside it -
+    # a record whose stored pair disagrees with its key is what the gate reads as a
+    # corrupt ledger, and the judged text is what makes the inheritance re-checkable.
+    case('the carried record is filed under the pair it is shipped for',
+         all(rec['ko'] == _moves[0][3] and rec['ko_judged'] == '\uac00\ub098 \ub2e4\ub77c\n'
+             for rec in _moved))
+    case('the carried record names which ground moved it',
+         all(rec['carried_by'] == 'derivation' for rec in _moved))
+    # The weaker ground, and the reason it exists: a source space the wrapper turns into a
+    # line break regroups the units around a substitution token, so neither string derives
+    # the other while not one character of the wording differs.
+    case('wording identity moves a separator but never adds or removes one',
+         qamod.wording_key('ja', '\uc18c\uc911\ud788\n\uc5ec\uae30\ub294')
+         == qamod.wording_key('ja', '\uc18c\uc911\ud788 \uc5ec\uae30\ub294')
+         and qamod.wording_key('ja', '\uc18c\uc911\ud788')
+         != qamod.wording_key('ja', '\uc18c\uc911\ud558'))
+    # Korean spacing is orthography. Deleting whitespace outright made `아루스왕자` and
+    # `아루스 왕자` one wording, so a judge that had filed "띄어쓰기가 누락됨" against the
+    # first carried its defect onto the second, where the spacing had just been fixed.
+    case('a missing space is a different wording, not a different layout',
+         qamod.wording_key('ja', '\uc544\ub8e8\uc2a4\uc655\uc790')
+         != qamod.wording_key('ja', '\uc544\ub8e8\uc2a4 \uc655\uc790'))
+    case('the gate accepts a carried verdict whose inheritance holds',
+         all(qagate.record_problem(rec, 'a b\nc d\n', _moves[0][3]) is None
+             for rec in _moved))
+    # Every carry rule is checked by the GATE, not trusted from the command that wrote it.
+    case('a carry that names a pair it was not judged under is refused',
+         qagate.record_problem(dict(_moved[0], carried_from='0' * 16),
+                               'a b\nc d\n', _moves[0][3])
+         == 'carried verdict does not name the pair it was judged under')
+    case('a half-written carry blocks instead of reading as an ordinary verdict',
+         'incomplete carried verdict' in (qagate.record_problem(
+             {k: v for k, v in _moved[0].items() if k != 'carried_ruleset'},
+             'a b\nc d\n', _moves[0][3]) or ''))
+    # A record that stores the exact text it was judged on makes no inheritance claim, so
+    # naming a source pair does not turn on the carry rules. 307669 ledger records predate
+    # this command and are ordinary verdicts by every rule that applies to them.
+    case('a record that stores the text it was judged on is not a carry claim',
+         qagate.record_problem(
+             _rec(judge=_qamod.JUDGES[0], en='a b\nc d\n', ko='\uac00\ub098\n\ub2e4\ub77c\n')
+             | {'carried_from': '0' * 16},
+             'a b\nc d\n', '\uac00\ub098\n\ub2e4\ub77c\n') is None)
+    # A derivation proven under one ruleset can be false under the next, so the stamp is
+    # what stops a stale inheritance from surviving a ruleset change unnoticed.
+    case('a carry proven under a superseded ruleset is refused',
+         're-run' in (qagate.record_problem(dict(_moved[0], carried_ruleset='0'),
+                                            'a b\nc d\n', _moves[0][3]) or ''))
+    # The weaker ground is re-proved from the record on every run, never trusted from the
+    # stamp: a carry made when a missing space still looked like a moved one has to stop
+    # counting the moment the rule tightens.
+    _bad_wording = dict(_moved[0], carried_by='wording',
+                        ko_judged='\uac00\ub098\ub2e4\ub77c\n',
+                        carried_from=qamod.pair_key('a b\nc d\n', '\uac00\ub098\ub2e4\ub77c\n'))
+    case('a wording carry whose identity no longer holds is refused',
+         'no longer holds' in (qagate.record_problem(
+             _bad_wording, 'a b\nc d\n', _moves[0][3]) or ''))
+    _rdoc = {'p': [_bad_wording, _rec(judge=_qamod.JUDGES[1], en='a b\nc d\n',
+                                      ko=_moves[0][3])]}
+    case('revoking a stale carry keeps the verdicts that still stand',
+         qacarry.revoke_stale_carries(_rdoc) == 1 and len(_rdoc['p']) == 1)
+    case('a pair left with nothing after revocation is dropped, not left empty',
+         qacarry.revoke_stale_carries({'p': [_bad_wording]}) == 1)
+    _prev_root = config.root()
+    config.set_root(_carry_root)
+    try:
+        case('carrying is idempotent', not qacarry.plan(_doc)[0])
+    finally:
+        if os.path.exists(os.path.join(_prev_root, config.PROJECT_FILE)):
+            config.set_root(_prev_root)
+    # A judge already on the target must not be counted twice: two records from one lane
+    # would let a single judge satisfy a panel that requires independent ones.
+    _doc2, _moves2 = _carry_plan('\uac00\ub098\n\ub2e4\ub77c\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    _target2 = _moves2[0][2]
+    _doc2[_target2] = [_rec(judge=_qamod.JUDGES[0], en='a b\nc d\n',
+                            ko='\uac00\ub098\n\ub2e4\ub77c\n')]
+    qacarry.carry(_doc2, _moves2)
+    case('a lane already on the target is not duplicated by the carry',
+         len({rec['judge'] for rec in _doc2[_target2]}) == len(_doc2[_target2]))
+    # Wording changed: not the same claim, and no rule derives one from the other.
+    case('a verdict does not carry onto different wording',
+         not _carry_plan('\uac00\ub098\n\ub9c8\ubc14\n', '\uac00\ub098 \ub2e4\ub77c\n')[1])
+    # A waiver is an operator decision about one exact translation. It re-keys on the same
+    # proof and never on the manifest key alone - 658 of them were reported stale after a
+    # reseal, still true and filed against text the build no longer ships.
+    _wdoc = _carry_fixture('\uac00\ub098\n\ub2e4\ub77c\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    _wfrom = qamod.pair_key('a b\nc d\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    _wv = {_wfrom: {'key': 'fam/k1', 'category': 'JUDGE_ERROR',
+                    'reason': 'recorded by the operator for this exact row'}}
+    _prev_root = config.root()
+    config.set_root(_carry_root)
+    try:
+        _wmoves = qacarry.plan(_wdoc, _wv)[1]
+        case('a waiver re-keys onto the pair now shipped', len(_wmoves) == 1)
+        case('a waiver move records its ground too', _wmoves[0][3] in ('derivation',
+                                                                      'wording'))
+        qacarry.move_waivers(_wv, _wmoves)
+        case('the waiver moves rather than being copied, so nothing goes stale',
+             _wfrom not in _wv and len(_wv) == 1)
+        # Two manifest keys may share one pair, so two waivers can re-key onto the same
+        # target. A pair carries exactly one, and the duplicate is dropped rather than
+        # left behind to be reported as stale.
+        _wdup = {_wfrom: {'key': 'fam/k1', 'category': 'JUDGE_ERROR',
+                          'reason': 'a duplicate decision about identical text'},
+                 next(iter(_wv)): next(iter(_wv.values()))}
+        case('a duplicate waiver on a shared pair is superseded, not left stale',
+             qacarry.move_waivers(_wdup,
+                                  [('fam/k1', _wfrom, next(iter(_wv)), 'derivation')])
+             == (0, 1) and _wfrom not in _wdup)
+        case('the moved waiver records the pair it was written against',
+             next(iter(_wv.values()))['carried_from'] == _wfrom)
+        case('re-keying waivers is idempotent', not qacarry.plan(_wdoc, _wv)[1])
+        # A waiver the build cannot use and no ground can move is obsolete - it grants
+        # nothing where it sits and the gate refuses the build while it is there. It is
+        # REPORTED, and removed only when `--prune` says so.
+        _obs = {'0' * 16: {'key': 'fam/k1', 'category': 'JUDGE_ERROR',
+                           'reason': 'written against text nobody ships'}}
+        _stale = qagate.validate(manmod.load()['entries'])[2]
+        case('staleness comes from the gate, not a second copy of the rule',
+             qacarry.obsolete_waivers(_wdoc, _obs, [])
+             == sorted(p for p in _stale if p in _obs))
+        case('a waiver that can still move is not called obsolete',
+             qacarry.obsolete_waivers(_wdoc, _obs, [('fam/k1', '0' * 16, 'x', 'wording')])
+             == [])
+        # A waiver whose translation is not derivable from the shipped one stays put: it
+        # was a decision about different text.
+        _wdoc2 = _carry_fixture('\uac00\ub098\n\ub9c8\ubc14\n', '\uac00\ub098 \ub2e4\ub77c\n')
+        case('a waiver does not re-key onto different wording',
+             not qacarry.plan(_wdoc2, {_wfrom: dict(_wv and next(iter(_wv.values())))})[1])
+    finally:
+        if os.path.exists(os.path.join(_prev_root, config.PROJECT_FILE)):
+            config.set_root(_prev_root)
+else:
+    skip('qacarry proof rules (no built reference font to measure with)')
 _pipe = open(os.path.join(ROOT, 'hanpatch/pipeline.py')).read()
 case('the packer requires the approved manifest digest',
      'approve(' in _pipe and 'SKIP_GATE' not in _pipe)
@@ -1631,10 +1856,8 @@ def _reread_cap():
             config.set_root(_prev)
 
 
-#: a real measurement font, borrowed from the reference project when it is built.
-#: The growth rules cannot be exercised without one - text_width needs advances.
-_EW_FONT = '/mnt/ssd256/m0a-crimson/work/ko/font_text.bcfnt'
-_HAVE_EW_FONT = os.path.exists(_EW_FONT)
+_EW_FONT = _EW_FONT_EARLY
+_HAVE_EW_FONT = _HAVE_EW_FONT_EARLY
 
 
 def _ew(profile_extra, en, ko, kind='dialogue'):
@@ -1723,8 +1946,8 @@ case('engine_wraps has exactly one reader in the package',
      sum(open(os.path.join(ROOT, 'hanpatch', f)).read().count("prof('engine_wraps')")
          for f in os.listdir(os.path.join(ROOT, 'hanpatch'))
          if f.endswith('.py')) == 1)
-case('both layout decisions go through the named accessor, not the profile',
-     _wsrc.count('title_lays_out_own_text()') == 3)
+case('every layout decision goes through the named accessor, not the profile',
+     _wsrc.count('title_lays_out_own_text()') == 4)
 case('a per-line container takes its unbroken rows into derivation',
      _prov_refuses(lambda: _derive(False), 'no font to measure against'))
 case('an engine-laid-out title skips them and derives nothing',
@@ -1775,8 +1998,129 @@ if _HAVE_EW_FONT:
          any('inside the word' in p for p in
              _ew({'engine_wraps': False, 'capacity': {'dialogue': 4}},
                  'a b', '\uac00' * 60)[1]))
+    # A trailing space on the LAST line is the whole normalisation-drift defect.
+    # `soften` turns the source's terminal newline into a space, the wrapper used to
+    # keep it (it only stripped spaces before a newline), and `normalise_ja_layout`
+    # then removed it on the next pass - so `check(check(x)) != check(x)` for 3751 of
+    # 14004 sampled DQ7 rows and the audit gate's demand became unsatisfiable.
+    def _ew_wrapped(text):
+        prof = {'budget': {'default': 64}, 'capacity': {'dialogue': 2},
+                'engine_wraps': False,
+                'font_src': [_EW_FONT], 'font_out': [_EW_FONT]}
+        json.dump(prof, open(os.path.join(_ewroot, 'p.json'), 'w'))
+        _prev = config.root()
+        config.set_root(_ewroot)
+        try:
+            return wrap.rewrap(text, 64)
+        finally:
+            if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+                config.set_root(_prev)
+
+    case('the wrapper ends no line in a space, including the last',
+         not any(line.endswith(' ')
+                 for line in _ew_wrapped('\uac00\ub098 \ub2e4\ub77c \ub9c8 ').split('\n')))
+    # The property the audit gate actually demands. A rule that only becomes
+    # reachable after the wrapper joined two display lines must still settle, or the
+    # sealed value and the rules can never agree.
+    def _ew_check(en, ko):
+        prof = {'budget': {'default': 64}, 'capacity': {'dialogue': 4},
+                'engine_wraps': False,
+                'font_src': [_EW_FONT], 'font_out': [_EW_FONT]}
+        json.dump(prof, open(os.path.join(_ewroot, 'p.json'), 'w'))
+        _prev = config.root()
+        config.set_root(_ewroot)
+        try:
+            return tr.check(en, ko, {}, 'dialogue')
+        finally:
+            if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+                config.set_root(_prev)
+
+    # The source shape that caused it: a record ending in a newline, which `soften`
+    # turns into a trailing space. Under the pre-fix wrapper this row never settles -
+    # each pass appends another space - so the case fails without the fix.
+    _once, _p1 = _ew_check('a b\nc d\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    _twice, _p2 = _ew_check('a b\nc d\n', _once)
+    case('check settles: normalising an already-normalised row changes nothing',
+         _p1 == [] and _p2 == [] and _once == _twice)
 else:
     skip('layout growth rules (no built reference font to measure with)')
+
+# Two rules undoing each other must be REPORTED, not resolved by whichever side the
+# loop happened to stop on: that would ship text the build's own rules disagree with,
+# which is the exact failure the audit gate exists to catch.
+def _oscillating_check():
+    _real_once = tr._check_once
+    flip = {'n': 0}
+
+    def once(en, ko, gl, kind='default', group=None):
+        flip['n'] += 1
+        return ('a' if ko == 'b' else 'b'), []
+
+    tr._check_once = once
+    try:
+        return tr.check('src', 'a', {}, 'dialogue')
+    finally:
+        tr._check_once = _real_once
+
+
+case('a value that never settles is reported instead of shipped',
+     any('did not settle' in p for p in _oscillating_check()[1]))
+
+print()
+print('== a budget belongs to a box, not to a family that inherited it ==')
+# DQ7 gave every `#` family the 278px measured from its dialogue box. Two of them
+# are the spell and item description panels, whose own 512 and 1112 source lines
+# never reach 104px and 119px. Against 278px the wrapper found no line to break, so
+# 570 descriptions shipped as one long line each and ran outside the panel on a real
+# console - with every gate reporting the corpus clean, because the text did fit the
+# width it was measured against.
+_evsrc = {
+    'panel': [{'key': f'k{i}', 'en': 'aa\nbb\ncc', 'jp': ''} for i in range(20)],
+    'dialogue': [{'key': f'd{i}', 'en': 'a much longer authored line here\nand another one',
+                  'jp': ''} for i in range(20)],
+}
+_tinysrc = {'panel': [{'key': 'k1', 'en': 'aa\nbb', 'jp': ''}]}
+
+
+def _derive_ev(profile_extra, src=None):
+    # 400 is under twice the dialogue fixture's own widest authored line, so that
+    # family is NOT contradicted and only the narrow one is reported.
+    prof = {'budget': {'default': 400}, 'engine_wraps': False}
+    if _HAVE_EW_FONT:
+        prof['font_src'] = [_EW_FONT]
+        prof['font_out'] = [_EW_FONT]
+    prof.update(profile_extra)
+    json.dump(prof, open(os.path.join(_ewroot, 'p.json'), 'w'))
+    os.makedirs(os.path.join(_ewroot, 'work', 'ko'), exist_ok=True)
+    _path = os.path.join(_ewroot, 'ev.json')
+    json.dump(src if src is not None else _evsrc, open(_path, 'w'), ensure_ascii=False)
+    _prev = config.root()
+    config.set_root(_ewroot)
+    try:
+        return capmod.build(_path)
+    finally:
+        if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+            config.set_root(_prev)
+
+
+if _HAVE_EW_FONT:
+    case('a family given more than twice its own widest source line is refused',
+         _prov_refuses(lambda: _derive_ev({}), 'panel'))
+    case('the refusal names the family and both numbers, not just the rule',
+         _prov_refuses(lambda: _derive_ev({}), 'widest source line'))
+    case('declaring that family its own budget clears the refusal',
+         bool(_derive_ev({'budget': {'default': 400, 'panel': 32}})))
+    # Where the ENGINE wraps, a stored row is not a display line, so its width is not
+    # evidence about any box and the comparison must not run at all.
+    case('an engine-laid-out title is not held to its stored line widths',
+         _derive_ev({'engine_wraps': True, 'budget': {'default': 400}},
+                    src={'panel': [{'key': f'k{i}', 'en': 'aa', 'jp': ''}
+                                   for i in range(20)]}) == {})
+    # A handful of short rows is noise, not a bound on a box.
+    case('too few measured lines to be evidence does not trigger the refusal',
+         bool(_derive_ev({}, src=_tinysrc)))
+else:
+    skip('budget-versus-evidence rules (no built reference font to measure with)')
 
 print()
 print('== built artifact naming and the font gate ==')
@@ -2445,9 +2789,15 @@ case('the runner has no --batch to be mistaken for --batch-chars',
      and "'--batch'," not in open(os.path.join(ROOT, 'hanpatch/run.py')).read())
 
 print('== the judge panel is scaled by identity, not by spend ==')
+# Every account on the machine, PLUS every account that has left it. Dropping a departed
+# account from the identity set is how 98,707 recorded verdicts stopped counting and 26,719
+# shipped pairs blocked as `unknown judge`.
 case('every Codex account on the machine is a judge identity',
      _qamod.codex_judges()
-     == [f'codex{a}:{_qamod.CODEX_MODEL}' for a in _prov.codex_accounts()])
+     == [f'codex{a}:{_qamod.CODEX_MODEL}'
+         for a in list(_prov.codex_accounts())
+         + [a for a in _qamod.DEPARTED_CODEX_ACCOUNTS
+            if a not in _prov.codex_accounts()]])
 case('the runtime panel is the explicit cheap QA tier',
      _qamod.active_judges() == _qamod.CHEAP_QA_JUDGES)
 case('the cheap QA tier offers three independent models',

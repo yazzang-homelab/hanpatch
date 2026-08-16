@@ -35,13 +35,19 @@ _WS_ONLY = re.compile(r'[\s\u3000]+')
 def wording_key(en, ko):
     """Identify unchanged wording across a layout-only rewrap.
 
-    The exact pair key remains the storage identity. This comparison removes
-    whitespace only because DQ7's wrapper may replace a source word-boundary
-    space with a newline or insert a newline between Korean syllables. Every
-    non-whitespace character must remain byte-for-byte identical. A carried
-    record must still store ``carried_from`` so the inheritance is auditable.
+    The exact pair key remains the storage identity. This comparison collapses each
+    run of whitespace to one space, because DQ7's wrapper may replace a word-boundary
+    space with a newline or break between Korean syllables - which moves a separator
+    without changing one. Every non-whitespace character must remain byte-for-byte
+    identical, and so must every PLACE a separator sits.
+
+    Deleting whitespace outright, as this did, made `아루스왕자` and `아루스 왕자` the same
+    wording. Korean spacing is orthography, not layout: a judge that had filed
+    "띄어쓰기가 누락됨" against the first then carried its defect onto the second, where
+    the spacing had just been fixed. A carried record must still store ``carried_from``
+    so the inheritance is auditable.
     """
-    return pair_key(en, _WS_ONLY.sub('', ko))
+    return pair_key(en, _WS_ONLY.sub(' ', ko).strip())
 
 
 def pair_key(en, ko):
@@ -231,8 +237,36 @@ CHEAP_QA_JUDGES = ['nimproxy:nvidia/nemotron-3-super-120b-a12b',
 _POOL_OVERRIDE = ''
 
 
+# Codex accounts that recorded verdicts on this box and are no longer present under
+# `/root/.codex-accounts`. Same rule as the Claude side, and the same measured cost when it
+# was missing: `codex3` left the disk carrying 98,707 recorded verdicts, and the next reseal
+# had the gate reject 26,719 shipped pairs as `unknown judge` - coverage those calls had
+# already paid for. A verdict is evidence of a call that WAS made; whether the account still
+# exists decides only whether it can be called again.
+DEPARTED_CODEX_ACCOUNTS = ('3',)
+
+
 def codex_judges():
-    return [f'codex{a}:{CODEX_MODEL}' for a in providers.codex_accounts()]
+    """One lane per Codex account, departed accounts included.
+
+    Discovery-by-directory is right for CALLING an account and wrong for RECOGNISING one:
+    the runtime pool comes from `providers.codex_accounts()`, which sees only what is on
+    disk, while the identity set must keep every account the ledger names.
+    """
+    accounts = list(providers.codex_accounts())
+    accounts += [a for a in DEPARTED_CODEX_ACCOUNTS if a not in accounts]
+    return [f'codex{a}:{CODEX_MODEL}' for a in accounts]
+
+
+def departed(lane):
+    """True for a lane whose account has left the box: known identity, unreachable.
+
+    Separate from `RETIRED_LANES`, which is a decision not to spend an account that still
+    works. Both keep their recorded verdicts and both refuse new calls; naming one is a
+    mistake worth a diagnostic rather than a provider that quietly returns nothing.
+    """
+    return lane in {f'codex{a}:{CODEX_MODEL}' for a in DEPARTED_CODEX_ACCOUNTS
+                    if a not in providers.codex_accounts()}
 
 
 # Claude accounts that recorded verdicts on this box and are no longer present under
@@ -341,6 +375,12 @@ def active_judges():
             f'retired judge lane(s) {retired}: their recorded verdicts remain valid, but '
             f'the account is closed and must not be called again. Remove them from the '
             f'pool. Reachable substitutes for the same model: a6, nimproxy.')
+    gone = [s for s in wanted if departed(s)]
+    if gone:
+        raise SystemExit(
+            f'departed judge lane(s) {gone}: the account is no longer on this box, so the '
+            f'call cannot be made. Its recorded verdicts stay valid - identity is kept '
+            f'precisely so the gate does not reject coverage that was already paid for.')
     held = [s for s in wanted if reserved(s)]
     if held:
         raise SystemExit(

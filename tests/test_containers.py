@@ -334,6 +334,51 @@ elif _ref_ruleset is not None and _ref_ruleset != _manmod.RULESET:
 else:
     print('  skip bundle cases (no approved reference project)')
 
+# Fonts were not the only project file the injector reads on the RECIPIENT's machine. A
+# title may declare artwork too - DQ7 draws its subtitle from a texture atlas and its
+# home-menu banner from an ExeFS member - and the bundle carried neither. The shipped r3
+# bundle therefore failed `hanpatch apply` for every reader with `missing rebuilt asset
+# CHARACTER/p0450.bcmdl.lz`, after being signed, hashed and published.
+_pl_root = tempfile.mkdtemp(prefix='hanpatch-payload-')
+os.makedirs(os.path.join(_pl_root, 'work', 'ko', 'title'), exist_ok=True)
+for _n in ('p0450.bcmdl.lz', 'p0487.bcmdl.lz'):
+    open(os.path.join(_pl_root, 'work', 'ko', 'title', _n), 'wb').write(b'art')
+open(os.path.join(_pl_root, 'banner.bin'), 'wb').write(b'banner')
+
+
+def _payload(profile_extra):
+    prof = {'budget': {'default': 64}, 'engine_wraps': True,
+            'assets': {'CHARACTER/p0450.bcmdl.lz': 'work/ko/title/p0450.bcmdl.lz'},
+            'exefs_replace': {'banner': 'banner.bin'}}
+    prof.update(profile_extra)
+    json.dump({'title': 'T', 'platform': 'threeds', 'adapter': 'dq7', 'target': 'ko',
+               'profile': 'p.json'},
+              open(os.path.join(_pl_root, config.PROJECT_FILE), 'w'))
+    json.dump(prof, open(os.path.join(_pl_root, 'p.json'), 'w'))
+    _prev = config.root()
+    config.set_root(_pl_root)
+    try:
+        return release._declared_payload()
+    finally:
+        if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+            config.set_root(_prev)
+
+
+_pl = _payload({})
+case('every declared project file the injector reads goes into the bundle',
+     sorted(_pl) == ['assets', 'exefs_replace']
+     and _pl['assets']['CHARACTER/p0450.bcmdl.lz'][0]
+     == 'payload/assets/CHARACTER_p0450.bcmdl.lz')
+case('a declared file that is missing refuses the release, it is not skipped',
+     raises(lambda: _payload(
+         {'assets': {'CHARACTER/x.lz': 'work/ko/title/nope.lz'}}),
+         'cannot be applied'))
+case('two declared names that flatten to one bundle path are refused',
+     raises(lambda: _payload(
+         {'assets': {'A/p0450.bcmdl.lz': 'work/ko/title/p0450.bcmdl.lz',
+                     'A_p0450.bcmdl.lz': 'work/ko/title/p0487.bcmdl.lz'}}),
+         'same bundle path'))
+
 print()
 print('== container fidelity (M3) ==')
 # Three defects found by demanding that an UNTOUCHED rebuild reproduce its source
