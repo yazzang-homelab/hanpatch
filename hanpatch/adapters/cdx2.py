@@ -50,6 +50,14 @@ class EncodeError(Exception):
     pass
 
 
+def _sjis_ok(ch):
+    try:
+        ch.encode('shift_jis')
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
 def load_font_map(work=None):
     path = os.path.join(work or config.work(), FONT_MAP)
     if not os.path.isfile(path):
@@ -134,8 +142,37 @@ class ClassicDungeonX2(adapter.Adapter):
         return box, arc, pairs
 
     @staticmethod
+    def _record_keys(script):
+        """{(chunk index, record start): 'chunkid:ordinal'}.
+
+        A record's BYTE OFFSET is not a stable identity: rewriting a line to a
+        different length moves every record after it, so a key built from the
+        offset stops resolving in the very file the patch produced. Verify then
+        reports "no record in the built ROM" for text that is present and
+        correct - measured here as 4192 false problems out of 4587 entries.
+
+        The ordinal within the chunk does not move, so that is the key.
+        """
+        out = {}
+        counts = {}
+        for record in script.records():
+            chunk = script.chunks[record.chunk]
+            n = counts.get(record.chunk, 0)
+            counts[record.chunk] = n + 1
+            out[(record.chunk, record.start)] = '%d:%d' % (chunk.id, n)
+        return out
+
+    @staticmethod
     def _family_of(chunk):
-        return chunk.name.replace('\\', '/')
+        """A family name is ONE filename component, never a path.
+
+        The core shards its state as work/<lang>/<kind>_<family>.json and merges
+        the shards with a NON-recursive glob. A family carrying a separator
+        therefore writes into a subdirectory that the merge never reads: 40
+        families' translations were invisible to `tm.load()`, so every pass
+        retranslated them and reported progress that did not move.
+        """
+        return chunk.name.replace('\\', '__')
 
     # -- extract ---------------------------------------------------------
 
@@ -156,10 +193,11 @@ class ClassicDungeonX2(adapter.Adapter):
         _box, _arc, pairs = self._scripts(blob)
         src = {}
         for script in pairs.values():
+            keys = self._record_keys(script)
             for record in script.records():
                 chunk = script.chunks[record.chunk]
                 src.setdefault(self._family_of(chunk), []).append({
-                    'key': '%d:%d' % (chunk.id, record.start),
+                    'key': keys[(record.chunk, record.start)],
                     'en': record.text.decode('shift_jis'),
                     'jp': '',
                 })
@@ -181,12 +219,12 @@ class ClassicDungeonX2(adapter.Adapter):
         applied = missing = 0
         rebuilt = {}
         for data, script in pairs.items():
-            by_id = {c.id: c.index for c in script.chunks}
+            keys = self._record_keys(script)
             edits = {}
             for record in script.records():
                 chunk = script.chunks[record.chunk]
-                key = '%s/%d:%d' % (self._family_of(chunk), chunk.id,
-                                    record.start)
+                key = '%s/%s' % (self._family_of(chunk),
+                                 keys[(record.chunk, record.start)])
                 text = entries.get(key)
                 if not text:
                     missing += 1
@@ -197,7 +235,6 @@ class ClassicDungeonX2(adapter.Adapter):
             for name, value in zip(PAIRS[list(pairs).index(data)],
                                    (table, body)):
                 rebuilt[name] = value
-            del by_id
         members = [(m.name, rebuilt.get(m.name, arc.read(m.name)))
                    for m in arc]
         payload = dsarc.build(members, arc.reserved)
@@ -245,19 +282,38 @@ class ClassicDungeonX2(adapter.Adapter):
         _box, _arc, pairs = self._scripts(blob)
         found = {}
         for script in pairs.values():
+            keys = self._record_keys(script)
             for record in script.records():
                 chunk = script.chunks[record.chunk]
-                key = '%s/%d:%d' % (self._family_of(chunk), chunk.id,
-                                    record.start)
+                key = '%s/%s' % (self._family_of(chunk),
+                                 keys[(record.chunk, record.start)])
                 found[key] = record.text
+        # A syllable with no cell cannot be encoded at all, so it must be
+        # reported as a problem rather than raised: with the glyph authority at
+        # build time this is the check that carries the whole weight, and a
+        # traceback out of verify would stop at the FIRST bad row instead of
+        # listing every one that needs rewording.
+        unmappable = set()
         for key, text in entries.items():
             stored = found.get(key)
             if stored is None:
                 problems.append('%s: no record in the built ROM' % key)
                 continue
-            if stored != encode_line(text, hangul):
+            try:
+                wanted = encode_line(text, hangul)
+            except EncodeError as exc:
+                bad = {c for c in text
+                       if c not in hangul and not _sjis_ok(c)}
+                unmappable |= bad
+                problems.append('%s: %s' % (key, exc))
+                continue
+            if stored != wanted:
                 problems.append('%s: stored bytes differ from the sealed text'
                                 % key)
+        if unmappable:
+            problems.append('%d syllable(s) have no cell in the built font: %s'
+                            % (len(unmappable),
+                               ''.join(sorted(unmappable))[:40]))
 
         # a glyph is renderable because the built font holds it, not because it
         # is in a Unicode range
