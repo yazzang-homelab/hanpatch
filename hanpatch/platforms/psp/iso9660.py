@@ -51,6 +51,8 @@ Content boundary: this module addresses and copies file extents as opaque bytes.
 It never decodes the contents of a file, and it has no opinion about what any
 particular title stores.
 """
+import os
+import shutil
 import struct
 
 SECTOR = 2048
@@ -180,6 +182,7 @@ class Iso:
         self.volume_id = None
         self.volume_space = None
         self.block_size = None
+        self.pvd_offset = None
         self._root = None
         self._read_descriptors()
 
@@ -223,6 +226,7 @@ class Iso:
             raise IsoError('no primary volume descriptor before the terminator')
 
     def _read_primary(self, at):
+        self.pvd_offset = at
         raw_id = bytes(self.blob[at + PVD_VOLUME_ID:at + PVD_VOLUME_ID + 32])
         self.volume_id = raw_id.decode('latin-1').rstrip(' ').rstrip('\x00')
         self.volume_space = _both_endian_32(self.blob, at + PVD_VOLUME_SPACE, 'PVD volume space')
@@ -334,3 +338,62 @@ class Iso:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def _patch_both_endian_32(fh, at, value):
+    fh.seek(at)
+    fh.write(struct.pack('<I', value) + struct.pack('>I', value))
+
+
+def sectors_for(size):
+    """Sectors an extent of `size` bytes occupies."""
+    return (size + SECTOR - 1) // SECTOR
+
+
+def write(src, out, changes):
+    """Copy `src` to `out`, replacing the contents of the named files.
+
+    `changes` maps an absolute path to its new bytes. A file that still fits the
+    sectors already allocated to it is written in place; one that grows past
+    them is moved to the end of the image and its directory record repointed.
+    Either way the record's size is updated, and the volume space size in the
+    primary descriptor is grown to cover anything appended.
+
+    Replacing a file with its own bytes reproduces the image exactly, which is
+    the identity test an adapter has to pass before it may claim to build.
+    """
+    with Iso.from_path(src) as iso:
+        targets = []
+        for path, blob in changes.items():
+            entry = iso.find(path)
+            if entry is None:
+                raise IsoError('no such file in the image: %s' % path)
+            if entry.is_dir:
+                raise IsoError('%s is a directory' % path)
+            targets.append((entry, blob))
+        volume_space = iso.volume_space
+        pvd_at = iso.pvd_offset
+
+    shutil.copyfile(src, out)
+    with open(out, 'r+b') as fh:
+        fh.seek(0, os.SEEK_END)
+        image_sectors = sectors_for(fh.tell())
+        end = max(volume_space, image_sectors)
+        for entry, blob in targets:
+            if sectors_for(len(blob)) <= sectors_for(entry.size):
+                lba = entry.lba
+            else:
+                lba = end
+                end += sectors_for(len(blob))
+            fh.seek(offset_of(lba))
+            fh.write(blob)
+            tail = -len(blob) % SECTOR
+            if tail:
+                fh.write(b'\x00' * tail)
+            record = entry.record_offset
+            _patch_both_endian_32(fh, record + DR_EXTENT, lba)
+            _patch_both_endian_32(fh, record + DR_SIZE, len(blob))
+        if end > volume_space:
+            _patch_both_endian_32(fh, pvd_at + PVD_VOLUME_SPACE, end)
+        fh.truncate(max(offset_of(end), offset_of(image_sectors)))
+    return out
