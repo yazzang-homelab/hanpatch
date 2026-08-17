@@ -263,3 +263,91 @@ class Font:
             members.append((name, sheet.encode()))
         return dsarc.build_idx(members, self.archive.ids,
                                self.archive.reserved)
+
+
+class Metrics:
+    """Width source for the layout gates, in the shape `wrap.char_width` needs.
+
+    The 3DS reader exposes `char_to_index` / `width_of` / `def_cw`, and the
+    layout core calls exactly those three. This presents the PSP font the same
+    way so the core does not have to know which platform it is measuring, and
+    so a width comes from the shipped font rather than from an assumed cell.
+
+    A retargeted cell keeps the advance of the glyph it replaced, so a Hangul
+    syllable measures as whatever kanji used to own that cell. Every one of them
+    is 15 px on this disc, which is the full-width advance a syllable wants, but
+    that is a measurement to re-check if the retarget pool ever changes.
+    """
+
+    def __init__(self, blob, hangul=None):
+        self.font = Font(blob)
+        self.by_char = {}
+        for glyph in self.font.glyphs:
+            ch = glyph.char
+            if ch is not None:
+                self.by_char.setdefault(ch, glyph)
+        for ch, code in (hangul or {}).items():
+            for glyph in self.font.glyphs:
+                if glyph.code == code:
+                    self.by_char[ch] = glyph
+                    break
+        widths = [g.advance for g in self.font.glyphs if g.advance]
+        self.def_cw = max(set(widths), key=widths.count) if widths else CELL
+
+    def char_to_index(self, ch):
+        glyph = self.by_char.get(ch)
+        return None if glyph is None else glyph.index
+
+    def width_of(self, index):
+        """(left, glyph width, advance) - the core reads the third."""
+        glyph = self.font.glyphs[index]
+        return (glyph.bearing, glyph.advance, glyph.advance)
+
+
+def free_codes(glyphs, want):
+    """Unused codes under lead bytes this font already proves the reader takes.
+
+    The disc's own glyphs run past standard Shift-JIS - there are entries under
+    lead bytes 0xF2, 0xF3 and 0xF5 - so the engine's reader is not limited to
+    the standard ranges. Even so, new codes are drawn only from lead bytes that
+    already carry glyphs, because those are the ones the shipped data proves are
+    read as a two-byte character rather than as two singles.
+    """
+    used = {g.code for g in glyphs}
+    leads = sorted({(g.code >> 8) & 0xFF for g in glyphs if g.code >= 0x100})
+    out = []
+    for lead in leads:
+        for trail in range(0x40, 0xFD):
+            if trail == 0x7F:
+                continue
+            code = (lead << 8) | trail
+            if code not in used:
+                out.append(code)
+                if len(out) >= want:
+                    return out
+    return out
+
+
+def append_glyphs(face, count):
+    """Add `count` metrics entries pointing at cells the font does not use.
+
+    The loader reads the glyph count out of FONT.BIN, allocates from it, and
+    builds its own {code, index} array which it then SORTS, so appended entries
+    need not be in code order and the table may grow. That was measured in the
+    loader at EBOOT 0x1d02c; without it, appending would be a guess about the
+    lookup and the empty cells would have to stay empty.
+    """
+    room = face.capacity - len(face.glyphs)
+    if count > room:
+        raise FontError('%d new entries but only %d empty cells'
+                        % (count, room))
+    codes = free_codes(face.glyphs, count)
+    if len(codes) < count:
+        raise FontError('only %d free codes for %d entries'
+                        % (len(codes), count))
+    added = []
+    for code in codes:
+        glyph = Glyph(len(face.glyphs), code, 0, CELL - 1)
+        face.glyphs.append(glyph)
+        added.append(glyph)
+    return added

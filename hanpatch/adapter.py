@@ -97,6 +97,28 @@ class Adapter(abc.ABC):
         """(source_fonts, built_fonts) used for width measurement."""
         return ([], [])
 
+    def font_metrics(self, blob):
+        """A width source for the layout gates, or None to use the 3DS reader.
+
+        The layout core measures a line by asking a font for `char_to_index`,
+        `width_of` and `def_cw`. It used to construct a 3DS BCFNT directly,
+        which silently made every non-3DS title unmeasurable: the gate does not
+        report 'wrong format', it reports that the source has no font. Returning
+        None keeps the existing titles on that path; a platform whose font is
+        not BCFNT returns its own reader here.
+        """
+        return None
+
+    def font_coverage(self, paths):
+        """The characters the BUILT fonts can render, or None for the 3DS path.
+
+        The glyph authority is the font that ships, so this is read back off
+        the built files rather than assumed from a Unicode range. A title whose
+        font is not a BCFNT answers here; returning None keeps the existing
+        titles on the reader they already use.
+        """
+        return None
+
     def recipe_facts(self):
         """Observed container facts, or None when this adapter has not been
         reduced to a recipe yet.
