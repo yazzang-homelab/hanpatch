@@ -47,11 +47,16 @@ def collect(arc):
             raise SystemExit('%s does not rebuild to itself; refusing to '
                              'extract from a pair we cannot put back' % dname)
         records = script.records()
+        counts = {}
         for r in records:
             chunk = script.chunks[r.chunk]
-            family = chunk.name.replace('\\', '/')
+            family = chunk.name.replace('\\', '__')
+            n = counts.get(r.chunk, 0)
+            counts[r.chunk] = n + 1
+            # ordinal, not byte offset: a rewritten line moves every offset
+            # after it, so an offset key stops resolving in the patched file
             src.setdefault(family, []).append({
-                'key': '%d:%d' % (chunk.id, r.start),
+                'key': '%d:%d' % (chunk.id, n),
                 'en': r.text.decode('shift_jis'),
                 'jp': '',
             })

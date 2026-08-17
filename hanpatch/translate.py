@@ -638,6 +638,27 @@ def _in_font(ch):
     until every target font has been built.
     """
     global _FONT_OK, _FONT_KEY
+    # WHERE this gate belongs depends on whether the title's charset is fixed or
+    # derived, and getting that wrong is circular rather than merely strict.
+    #
+    # A title whose font covers a declared charset (DQ7: ksx1001, 2350 glyphs in
+    # a font with room) can build the font BEFORE translating, so checking every
+    # candidate string against it during translation is sound.
+    #
+    # This title cannot. Its engine advances the cursor by scale*(advance+1), so
+    # a zero-width glyph is impossible and compositional jamo rendering is ruled
+    # out - one cell per precomposed syllable, 1840 cells against Korean's
+    # 11172. The charset is therefore DERIVED from the translation, and gating
+    # the translation on a font derived from that same translation is a loop:
+    # measured here as three rebake rounds, each one uncovering syllables the
+    # previous round's font did not hold.
+    #
+    # 'build' moves the authority to where it can actually be satisfied: the
+    # font is baked from the shipped text and `verify` reads it back out of the
+    # ROM. That is not a weaker gate, it is the same gate at the only point in
+    # the order where it is answerable.
+    if config.prof('glyph_authority') == 'build':
+        return True
     targets = _target_fonts()
     key = tuple((p, os.path.getmtime(p), os.path.getsize(p))
                 for p in targets if os.path.exists(p))
