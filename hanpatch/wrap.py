@@ -176,6 +176,21 @@ SUBST_WIDTH_DEFAULT = config.prof('substitution_width_default')
 _font = None
 
 
+def _adapter_metrics(blob):
+    """Ask the title's adapter for a width source before assuming BCFNT.
+
+    A platform whose font is not a 3DS BCFNT returns its own reader from
+    `Adapter.font_metrics`. Without this the layout gate reported "no font to
+    measure against" for such a title, which reads as a missing profile entry
+    rather than as the core being coupled to one platform's format.
+    """
+    try:
+        from hanpatch import adapter as _adapter
+        return _adapter.project_adapter().font_metrics(blob)
+    except Exception:
+        return None
+
+
 def font(path=None, ko=None):
     """Measurement font: the built target font when present, else the source.
 
@@ -192,7 +207,9 @@ def font(path=None, ko=None):
         cands += [config.p(x) for x in config.prof('font_src')]
         for c in cands:
             if c and os.path.exists(c):
-                _font = Bcfnt(open(c, 'rb').read())
+                with open(c, 'rb') as fh:
+                    blob = fh.read()
+                _font = _adapter_metrics(blob) or Bcfnt(blob)
                 return _font
         raise SystemExit('no font to measure against; set font_src/font_out '
                          'in the title profile')

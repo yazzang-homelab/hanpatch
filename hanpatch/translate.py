@@ -651,6 +651,24 @@ def _in_font(ch):
             raise SystemExit(
                 f'glyph authority incomplete: found {paths}, need {targets}. '
                 'Run hanpatch fonts.')
+        from hanpatch import adapter as _adapter
+        supplied = None
+        try:
+            supplied = _adapter.project_adapter().font_coverage(paths)
+        except Exception:
+            supplied = None
+        if supplied is not None:
+            # set the cache and fall through to the membership test below.
+            # Returning the set here instead made `_in_font` answer with a
+            # non-empty set, which is truthy, so every character passed and the
+            # glyph gate reported clean while rows shipped syllables the built
+            # font does not hold.
+            ok = set(supplied)
+            ok.add('\n')
+            _FONT_OK = ok
+            _FONT_KEY = key
+            return ch in _FONT_OK
+
         from hanpatch.platforms.threeds.bcfnt import Bcfnt
         sets = []
         for p in paths:
