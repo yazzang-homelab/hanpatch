@@ -209,5 +209,17 @@
  ],
  "glyph_authority": "build",
  "_glyph_authority_comment": "Measured, not preferred. The renderer advances by scale*(advance+1) (EBOOT 0x1ddc0), so an advance of 0 still moves the cursor one pixel and jamo cannot be overlaid - compositional Hangul is impossible on this engine and every syllable needs its own cell. With 1840 cells against 11172 precomposed syllables the charset must be DERIVED from the translation, which makes a translation-time glyph filter circular: it was run that way and took three rebake rounds, each uncovering syllables the last font lacked. The authority moves to the build, where the font is baked from the shipped text and verify reads it back out of the ROM.",
- "budget_measured": "NOT a measured box. These are the widest line each family actually renders, computed from the shipped text and the font's own per-glyph advances (1-15px at a 16px cell, EBOOT renderer steps scale*(advance+1)). The container drew those lines, so each number is a LOWER BOUND on its box: using it as the budget can only be tighter than the truth, never looser, so it cannot let overflow through. The real box width needs a screenshot from a running renderer and has not been taken; when it is, these numbers should be replaced and this note rewritten rather than kept alongside a measurement it no longer describes."
+ "budget_measured": "NOT a measured box. These are the widest line each family actually renders, computed from the shipped text and the font's own per-glyph advances (1-15px at a 16px cell, EBOOT renderer steps scale*(advance+1)). The container drew those lines, so each number is a LOWER BOUND on its box: using it as the budget can only be tighter than the truth, never looser, so it cannot let overflow through. The real box width needs a screenshot from a running renderer and has not been taken; when it is, these numbers should be replaced and this note rewritten rather than kept alongside a measurement it no longer describes.",
+ "latin_allow": [
+  "LDT",
+  "ANMVITER",
+  "ANMPARTY",
+  "OPENING",
+  "DICANM6090",
+  "DICANM6330",
+  "DICANM6360",
+  "DICANM6390",
+  "LV"
+ ],
+ "_latin_allow_comment": "Classified by CONTEXT, not by shape. Every token above except LV appears only in rows that contain no Japanese at all - they are asset and animation references the engine resolves, not text a player reads, so translating them would break the reference. Shape alone gets this wrong: CRITICAL, SELECT and OPENING are all-caps like the identifiers, but CRITICAL and SELECT occur INSIDE Japanese prose and are therefore labels a Korean player should read in Korean, while OPENING occurs only in ASCII-only rows. LV is the one policy call: a level abbreviation Korean RPGs conventionally keep. The remaining English words in the corpus - CRITICAL, SELECT, Music, Macro, Language, Invalidity, JobSkill - are deliberately NOT allowed, because leaving them is a translation that did not happen."
 }
