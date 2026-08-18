@@ -20,6 +20,7 @@ import unicodedata
 
 
 from hanpatch import glossary
+from hanpatch import korean
 from hanpatch import register
 from hanpatch import josa
 from hanpatch import providers
@@ -620,6 +621,13 @@ def _check_once(en, ko, gl, kind='default', group=None):
     bad = [c for c in ko if not _in_font(c)]
     if bad:
         problems.append(f'unsupported glyphs: {sorted(set(bad))[:8]}')
+    # Korean writes spaces between eojeol and Japanese writes none, so a lane
+    # that mirrors the source's spacing produces a line that reads as one word.
+    # Structural because it is: a judge caught a quarter of these and passed the
+    # rest. See hanpatch/korean.py for the measured threshold.
+    spacing = korean.check(ko)
+    if spacing:
+        problems.append(spacing)
     return ko, problems[:6]
 
 

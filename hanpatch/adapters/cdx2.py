@@ -71,10 +71,33 @@ def load_font_map(work=None):
     return {ch: int(code) for ch, code in doc['map'].items()}
 
 
+#: Characters a translator reaches for that this font does not hold, mapped to
+#: the mark it DOES hold. Not a convenience: the middle dot was swept out of the
+#: corpus once by hand and the next retranslation put it straight back, because
+#: nothing enforced it. An equivalence belongs where the bytes are written, so it
+#: cannot be undone by the next pass.
+#:
+#: Each entry is the same mark in a different codepoint, verified present in the
+#: shipped font - never a substitution that changes what the reader sees.
+EQUIVALENT = {
+    '\u00b7': '\u30fb',      # MIDDLE DOT -> KATAKANA MIDDLE DOT (advance 5)
+    '\u2022': '\u30fb',      # BULLET
+    '\uff65': '\u30fb',      # HALFWIDTH KATAKANA MIDDLE DOT
+    '\u2013': '-',           # EN DASH -> HYPHEN-MINUS
+    '\u2014': '-',           # EM DASH
+    '\u2026': '\u2026',      # HORIZONTAL ELLIPSIS, kept explicit for the audit
+}
+
+
+def normalise(text):
+    """Replace marks the font lacks with the identical mark it carries."""
+    return ''.join(EQUIVALENT.get(c, c) for c in text)
+
+
 def encode_line(text, hangul):
     """Shift-JIS bytes for a translated line, Hangul via retargeted cells."""
     out = bytearray()
-    for ch in text:
+    for ch in normalise(text):
         code = hangul.get(ch)
         if code is not None:
             out += bytes([(code >> 8) & 0xFF, code & 0xFF]) if code > 0xFF \
