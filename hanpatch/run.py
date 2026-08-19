@@ -339,8 +339,17 @@ def main(argv=None):
             _, probs = translate.check(en, ko, glossary.relevant(gl, [en]), args.family)
             if probs:
                 seen.add(en)
+                # The problems go INTO the prompt, in the field `--qafail` already
+                # uses for judge complaints. Computing them and dropping them is
+                # what this pass used to do, so the model was asked to translate a
+                # row again with no idea why the last attempt was refused - it
+                # answered with prose of the same length and the gate refused that
+                # too. Measured on Classic Dungeon X2: 40 of 56 rows came back
+                # unfixed that way, every one of them a row whose only defect was
+                # being too long for the lines its own source draws.
                 todo.append({'en': en, 'jp': it.get('jp', ''),
                              'group': capmod.group(args.family, it['key']),
+                             'qa': '; '.join(str(p) for p in probs)[:300],
                              'refs': [f"{args.family}:{it['key']}"]})
     else:
         todo = [x for x in tm.untranslated(src)
@@ -394,8 +403,19 @@ def main(argv=None):
             got = {batch[k]['en']: ko for k, ko in res.items()}
             prov = {batch[k]['en']: tr.last_provider.get(k, '')
                     for k in res}
-            bad = {batch[k]['en']: {'refs': batch[k]['refs'],
-                                    'reason': 'validation failed'} for k in failed}
+            # Record WHAT was rejected and WHY, not just that something was. A shard
+            # that says only 'validation failed' forces the next pass to re-run the
+            # model to discover the rule that objected - which is exactly how a
+            # config-level defect (a tag recogniser matching nothing, so every
+            # translation of a printf string read as copied source) stayed invisible
+            # while 69 rows failed against it repeatedly.
+            bad = {}
+            for k in failed:
+                cand, probs = tr.last_reject.get(k, ('', []))
+                bad[batch[k]['en']] = {'refs': batch[k]['refs'],
+                                       'reason': 'validation failed',
+                                       'candidate': cand,
+                                       'problems': probs}
             tmdb.update(got)
             save_json_locked(shard, got, what='the translation memory shard')
             if args.qafail and got:

@@ -750,9 +750,22 @@ def row_line_slots(page):
     message reaches the bottom of its box. A translation that puts its text on
     line 1 and the blanks after it renders in the wrong place on the screen even
     though the line count matches.
+
+    A line holding nothing but a tag is content unless that tag is a declared
+    zero-width CONTROL token: `%s` on its own line draws a name. Removing every
+    tag before looking measured `eboot.elf/off241da8` as 5 lines where the
+    container draws 6, so its re-flow had one line too many to place and the row
+    came back refused for a tag it had not actually lost. Control tags are the
+    ones the title declares in `control_tags`; a printf-style title declares none,
+    because every token it has renders a value.
     """
-    return [i for i, line in enumerate(page.split('\n'))
-            if TAG.sub('', line).strip()]
+    control = set(config.prof('control_tags') or ())
+
+    def drawn(line):
+        return TAG.sub(lambda m: '' if m.group() in control else m.group(),
+                       line).strip()
+
+    return [i for i, line in enumerate(page.split('\n')) if drawn(line)]
 
 
 def row_budget(page):
@@ -792,10 +805,26 @@ def row_layout(en, ko):
         slots = row_line_slots(src)
         budget = row_budget(src)
         lines = src.split('\n')
-        body = ' '.join(line.strip() for line in page.split('\n')
-                        if TAG.sub('', line).strip())
+        # Same rule as `row_line_slots`: a line that draws a runtime value is a line
+        # of content and must travel into the re-flow, or the value is lost.
+        ko_lines = [page.split('\n')[j].strip() for j in row_line_slots(page)] \
+            if '\n' in page else [page.strip()]
+        body = ' '.join(ko_lines)
         if not slots or budget <= 0 or not body:
             out.append(page)
+            continue
+        # Line-for-line already, and every line fits: KEEP the translator's own
+        # breaks. Re-flowing regardless turned `eboot.elf/off241da8` - a label/value
+        # table, one stat per line - into three lines of prose reading
+        # `몬스터 레벨 %4d 출구 / 출현율 %4d 건너가기 / 출현율 %4d`. Joining is only
+        # right when the line COUNT has to change; where it does not, the existing
+        # breaks carry meaning this function cannot see.
+        if len(ko_lines) == len(slots) and all(
+                text_width(line) <= budget for line in ko_lines):
+            placed = [''] * len(lines)
+            for slot, text in zip(slots, ko_lines):
+                placed[slot] = text
+            out.append('\n'.join(placed))
             continue
         for word in overlong_units(body, budget)[:1]:
             probs.append(f'"{word}" is {unit_width(units(word)[0]):.0f}px and this '
