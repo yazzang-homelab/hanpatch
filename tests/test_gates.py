@@ -562,7 +562,15 @@ else:
 _carry_root = tempfile.mkdtemp(prefix='hanpatch-qacarry-')
 
 
-def _carry_fixture(sealed, judged, en='a b\nc d\n'):
+# The fixture's source lines are 56px, which holds `가나` but not `가나 다라`, so the
+# wrapper's break is the thing being carried. Latin `a b` is 22px - narrower than two
+# Hangul syllables - and a row measured against its own source lines is refused there
+# before any derivation can be attempted, which is a property of the fixture rather
+# than of the rule under test.
+_CARRY_EN = 'aaa bbb\naaa bbb\n'
+
+
+def _carry_fixture(sealed, judged, en=_CARRY_EN):
     """A one-row project whose ledger holds `judged` and whose manifest ships `sealed`."""
     json.dump({'title': 'c', 'platform': 'threeds', 'adapter': 'crimson_shroud',
                'target': 'ko', 'profile': 'p.json'},
@@ -588,7 +596,7 @@ def _carry_fixture(sealed, judged, en='a b\nc d\n'):
     return doc
 
 
-def _carry_plan(sealed, judged, en='a b\nc d\n'):
+def _carry_plan(sealed, judged, en=_CARRY_EN):
     doc = _carry_fixture(sealed, judged, en)
     _prev = config.root()
     config.set_root(_carry_root)
@@ -632,40 +640,40 @@ if _HAVE_EW_FONT_EARLY:
          qamod.wording_key('ja', '\uc544\ub8e8\uc2a4\uc655\uc790')
          != qamod.wording_key('ja', '\uc544\ub8e8\uc2a4 \uc655\uc790'))
     case('the gate accepts a carried verdict whose inheritance holds',
-         all(qagate.record_problem(rec, 'a b\nc d\n', _moves[0][3]) is None
+         all(qagate.record_problem(rec, _CARRY_EN, _moves[0][3]) is None
              for rec in _moved))
     # Every carry rule is checked by the GATE, not trusted from the command that wrote it.
     case('a carry that names a pair it was not judged under is refused',
          qagate.record_problem(dict(_moved[0], carried_from='0' * 16),
-                               'a b\nc d\n', _moves[0][3])
+                               _CARRY_EN, _moves[0][3])
          == 'carried verdict does not name the pair it was judged under')
     case('a half-written carry blocks instead of reading as an ordinary verdict',
          'incomplete carried verdict' in (qagate.record_problem(
              {k: v for k, v in _moved[0].items() if k != 'carried_ruleset'},
-             'a b\nc d\n', _moves[0][3]) or ''))
+             _CARRY_EN, _moves[0][3]) or ''))
     # A record that stores the exact text it was judged on makes no inheritance claim, so
     # naming a source pair does not turn on the carry rules. 307669 ledger records predate
     # this command and are ordinary verdicts by every rule that applies to them.
     case('a record that stores the text it was judged on is not a carry claim',
          qagate.record_problem(
-             _rec(judge=_qamod.JUDGES[0], en='a b\nc d\n', ko='\uac00\ub098\n\ub2e4\ub77c\n')
+             _rec(judge=_qamod.JUDGES[0], en=_CARRY_EN, ko='\uac00\ub098\n\ub2e4\ub77c\n')
              | {'carried_from': '0' * 16},
-             'a b\nc d\n', '\uac00\ub098\n\ub2e4\ub77c\n') is None)
+             _CARRY_EN, '\uac00\ub098\n\ub2e4\ub77c\n') is None)
     # A derivation proven under one ruleset can be false under the next, so the stamp is
     # what stops a stale inheritance from surviving a ruleset change unnoticed.
     case('a carry proven under a superseded ruleset is refused',
          're-run' in (qagate.record_problem(dict(_moved[0], carried_ruleset='0'),
-                                            'a b\nc d\n', _moves[0][3]) or ''))
+                                            _CARRY_EN, _moves[0][3]) or ''))
     # The weaker ground is re-proved from the record on every run, never trusted from the
     # stamp: a carry made when a missing space still looked like a moved one has to stop
     # counting the moment the rule tightens.
     _bad_wording = dict(_moved[0], carried_by='wording',
                         ko_judged='\uac00\ub098\ub2e4\ub77c\n',
-                        carried_from=qamod.pair_key('a b\nc d\n', '\uac00\ub098\ub2e4\ub77c\n'))
+                        carried_from=qamod.pair_key(_CARRY_EN, '\uac00\ub098\ub2e4\ub77c\n'))
     case('a wording carry whose identity no longer holds is refused',
          'no longer holds' in (qagate.record_problem(
-             _bad_wording, 'a b\nc d\n', _moves[0][3]) or ''))
-    _rdoc = {'p': [_bad_wording, _rec(judge=_qamod.JUDGES[1], en='a b\nc d\n',
+             _bad_wording, _CARRY_EN, _moves[0][3]) or ''))
+    _rdoc = {'p': [_bad_wording, _rec(judge=_qamod.JUDGES[1], en=_CARRY_EN,
                                       ko=_moves[0][3])]}
     case('revoking a stale carry keeps the verdicts that still stand',
          qacarry.revoke_stale_carries(_rdoc) == 1 and len(_rdoc['p']) == 1)
@@ -682,7 +690,7 @@ if _HAVE_EW_FONT_EARLY:
     # would let a single judge satisfy a panel that requires independent ones.
     _doc2, _moves2 = _carry_plan('\uac00\ub098\n\ub2e4\ub77c\n', '\uac00\ub098 \ub2e4\ub77c\n')
     _target2 = _moves2[0][2]
-    _doc2[_target2] = [_rec(judge=_qamod.JUDGES[0], en='a b\nc d\n',
+    _doc2[_target2] = [_rec(judge=_qamod.JUDGES[0], en=_CARRY_EN,
                             ko='\uac00\ub098\n\ub2e4\ub77c\n')]
     qacarry.carry(_doc2, _moves2)
     case('a lane already on the target is not duplicated by the carry',
@@ -694,7 +702,7 @@ if _HAVE_EW_FONT_EARLY:
     # proof and never on the manifest key alone - 658 of them were reported stale after a
     # reseal, still true and filed against text the build no longer ships.
     _wdoc = _carry_fixture('\uac00\ub098\n\ub2e4\ub77c\n', '\uac00\ub098 \ub2e4\ub77c\n')
-    _wfrom = qamod.pair_key('a b\nc d\n', '\uac00\ub098 \ub2e4\ub77c\n')
+    _wfrom = qamod.pair_key(_CARRY_EN, '\uac00\ub098 \ub2e4\ub77c\n')
     _wv = {_wfrom: {'key': 'fam/k1', 'category': 'JUDGE_ERROR',
                     'reason': 'recorded by the operator for this exact row'}}
     _prev_root = config.root()
@@ -1535,6 +1543,12 @@ _READER_EXCLUDE = {
     # rather than edited from this change set, which is exactly the treatment
     # `capacity.py` and `wrap.py` already have.
     'channel.py',
+    # `loop.py` is the second reader that must not refuse: its state document is a
+    # durable work queue, so a damaged one is renamed aside and rebuilt rather than
+    # aborting the run the operator is in the middle of. `load_object` exits instead.
+    # It validates its own shape in `_valid_state` and quarantines what fails, which
+    # `tests/test_loop.py::test_corrupt_state_is_preserved` is what proves.
+    'loop.py',
 }
 _bare_loads = []
 for _path in sorted(glob.glob(os.path.join(ROOT, 'hanpatch', '*.py'))):
@@ -1936,8 +1950,28 @@ def _derive(engine_wraps):
 _wsrc = open(os.path.join(ROOT, 'hanpatch', 'wrap.py')).read()
 _csrc = open(os.path.join(ROOT, 'hanpatch', 'capacity.py')).read()
 _psrc = open(os.path.join(ROOT, 'hanpatch', 'pipeline.py')).read()
-case('is_freeform has exactly one consumer and it is the predicate',
-     sum(_wsrc.count(n) for n in ('is_freeform(en)',)) == 2
+def _freeform_callers():
+    """Functions in wrap.py that call `is_freeform`.
+
+    A count is the wrong shape for this rule: the point is not how many calls exist
+    but that every one of them sits inside a NAMED predicate, so no gate can reach
+    the raw shape test and answer a layout-authority question with it.
+    """
+    tree = _ast.parse(_wsrc)
+    out = set()
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.FunctionDef):
+            continue
+        for inner in _ast.walk(node):
+            if (isinstance(inner, _ast.Call)
+                    and isinstance(inner.func, _ast.Name)
+                    and inner.func.id == 'is_freeform'):
+                out.add(node.name)
+    return out
+
+
+case('is_freeform is consumed only inside the named predicates',
+     _freeform_callers() == {'engine_lays_out', 'row_draws_its_own_lines'}
      and 'is_freeform' not in _csrc and 'is_freeform' not in _psrc)
 case('every module that decides whether a row is measured calls the predicate',
      'wrap.engine_lays_out(' in _csrc and 'wrap.engine_lays_out(' in _psrc
@@ -1947,7 +1981,7 @@ case('engine_wraps has exactly one reader in the package',
          for f in os.listdir(os.path.join(ROOT, 'hanpatch'))
          if f.endswith('.py')) == 1)
 case('every layout decision goes through the named accessor, not the profile',
-     _wsrc.count('title_lays_out_own_text()') == 4)
+     _wsrc.count('title_lays_out_own_text()') == 5)
 case('a per-line container takes its unbroken rows into derivation',
      _prov_refuses(lambda: _derive(False), 'no font to measure against'))
 case('an engine-laid-out title skips them and derives nothing',
@@ -1998,6 +2032,70 @@ if _HAVE_EW_FONT:
          any('inside the word' in p for p in
              _ew({'engine_wraps': False, 'capacity': {'dialogue': 4}},
                  'a b', '\uac00' * 60)[1]))
+
+    # A row whose SOURCE carries a break is measured against ITSELF. The family
+    # budget cannot see this defect: it is the widest row anywhere in the family, so
+    # a 459px Korean line in a 267px slot passed it and ran off both edges of the
+    # screen. 376 rows shipped that way, every one of them reported clean, because
+    # padding made the stored line COUNT match while all the text sat on line 1.
+    _ROW_SRC = 'aaaaaaaaaa bbbbbbbbbb\ncccccccccc dddddddddd'
+
+    def _row(en, ko, budget=4096, lower_bound=True):
+        prof = {'budget': {'default': budget}, 'capacity': {'dialogue': 40},
+                'engine_wraps': False, 'budget_is_lower_bound': lower_bound,
+                'font_src': [_EW_FONT], 'font_out': [_EW_FONT]}
+        return _ew(prof, en, ko)
+
+    def _measured(fn):
+        """Run `fn` with the engine-wrap project active, so the font is loadable.
+
+        Measuring outside it reads whichever project the suite is pointed at, which
+        may have no font at all - the assertion then dies on a missing font instead
+        of reporting what it measured.
+        """
+        _prev = config.root()
+        config.set_root(_ewroot)
+        try:
+            return fn()
+        finally:
+            if os.path.exists(os.path.join(_prev, config.PROJECT_FILE)):
+                config.set_root(_prev)
+
+    # A title whose budget IS the measured box keeps the whole box: holding its rows
+    # to the widest line each one happens to draw would refuse 7980 correct DQ7 rows,
+    # so the row rule is off until the title says its budgets are lower bounds.
+    _kept, _kprobs = _row(_ROW_SRC, '\uac00\ub098 ' * 7, lower_bound=False)
+    case('a measured box is not narrowed to the widest line one row draws',
+         _kprobs == []
+         and len([ln for ln in _kept.split('\n') if ln.strip()]) == 1)
+    _flowed, _fprobs = _row(_ROW_SRC, '\uac00\ub098 ' * 7)
+    case('a collapsed row is re-flowed across the lines its own source draws',
+         _fprobs == [] and _flowed.count('\n') == 1
+         and all(line.strip() for line in _flowed.split('\n')))
+    case('no re-flowed line is wider than the widest line that row itself draws',
+         _measured(lambda: max(wrap.text_width(line)
+                               for line in _flowed.split('\n'))
+                   <= wrap.row_budget(_ROW_SRC)))
+    # The family budget here is 4096px, far wider than any real box: without the
+    # per-row bound this same value is clean on one line, which is precisely how it
+    # shipped.
+    case('the family budget alone would have passed the same text on one line',
+         _measured(lambda: wrap.rewrap('\uac00\ub098 ' * 7, 4096).count('\n') == 0))
+    # A leading blank line is vertical POSITION, not filler: STRTBL/s756 stores
+    # eleven empty lines and then its message, which is how the text reaches the
+    # bottom of its box. Moving it to line 1 renders in the wrong place while the
+    # line count still matches.
+    _pos, _pprobs = _row('\n\n\uac00\ub098\ub2e4\ub77c\ub9c8\ubc14\uc0ac\uc544',
+                         '\ub9c8\ubc14\uc0ac \uc544\uc790\uc728')
+    case('a blank line before the text keeps the text where the source drew it',
+         _pprobs == [] and _pos.split('\n')[:2] == ['', '']
+         and _pos.split('\n')[2].strip())
+    # Refusal, not silent shortening: only a translator can decide what to drop.
+    _over, _oprobs = _row(_ROW_SRC, '\uac00\ub098 ' * 40)
+    case('Korean that cannot be broken onto its own source lines is refused',
+         any('shorten the translation' in p for p in _oprobs))
+    case('a refused row still settles instead of oscillating',
+         _row(_ROW_SRC, _over)[0] == _over)
     # A trailing space on the LAST line is the whole normalisation-drift defect.
     # `soften` turns the source's terminal newline into a space, the wrapper used to
     # keep it (it only stripped spaces before a newline), and `normalise_ja_layout`
@@ -2038,8 +2136,13 @@ if _HAVE_EW_FONT:
     # The source shape that caused it: a record ending in a newline, which `soften`
     # turns into a trailing space. Under the pre-fix wrapper this row never settles -
     # each pass appends another space - so the case fails without the fix.
-    _once, _p1 = _ew_check('a b\nc d\n', '\uac00\ub098 \ub2e4\ub77c\n')
-    _twice, _p2 = _ew_check('a b\nc d\n', _once)
+    # The source lines are long enough to hold the Korean: this case is about
+    # settling, and a row measured against its OWN source lines has to be given
+    # source lines that can hold it, or it refuses first and never reaches the
+    # property under test.
+    _SETTLE_SRC = 'aaaaaaaaaa bbbbbbbbbb\ncccccccccc dddddddddd\n'
+    _once, _p1 = _ew_check(_SETTLE_SRC, '\uac00\ub098 \ub2e4\ub77c\n')
+    _twice, _p2 = _ew_check(_SETTLE_SRC, _once)
     case('check settles: normalising an already-normalised row changes nothing',
          _p1 == [] and _p2 == [] and _once == _twice)
 else:
@@ -2540,6 +2643,18 @@ case('mixed target evidence does not invent a whole-record register',
      and _reg.divergence('もう行くのだ。', '이쪽으로 오세요. 이제 간다') is None)
 case('numeric spans are not mistaken for copied Latin words',
      tr.copied_spans('10 10 1000', '10 10 1000') == [])
+# A stat token fused to a digit run is still a stat token. The exemption tested
+# only bare words, so `HP100` fell outside it and every correct translation of a
+# stat line read as copied prose: measured on Classic Dungeon X2, 57 sources
+# carry such a token (`lv999`, `sp12`, `atk999`, `x2`) and 32 STRTBL rows plus 15
+# WEAPON rows were IMPOSSIBLE to pass - satisfying the rule required corrupting
+# the digits the engine reads.
+case('an allow-listed stat token fused to digits is not a copied span',
+     tr.copied_spans('HP100 MP50 LV20', 'HP100 MP50 LV20') == [])
+case('digits alone do not launder a genuinely copied span',
+     tr.copied_spans('the ancient sword 10', 'the ancient sword 10') != [])
+case('a copied span is still caught when it is pure prose',
+     tr.copied_spans('the ancient sword', 'the ancient sword') != [])
 case('an embedded polite marker without a final ending is undecided',
      _reg.of_korean('이쪽으로 오세요. 그리고 그때') is None)
 

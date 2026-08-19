@@ -47,7 +47,8 @@ _LIST_KEYS = ('models', 'name_keys', 'ui_only_families', 'ui_only_terms', 'hard_
 # is honoured. They join the list above when the skip policy actually moves into
 # the profile.
 _MODE_KEYS = {'copied_spans_tokenizer': ('latin',)}
-_BOOL_KEYS = ('fullwidth_is_content', 'engine_wraps')
+_BOOL_KEYS = ('fullwidth_is_content', 'engine_wraps', 'glossary_required',
+              'budget_is_lower_bound')
 _STRING_KEYS = ('judge_policy', 'book_title_ko')
 
 
@@ -287,6 +288,18 @@ DEFAULT_PROFILE = {
     # every unbroken row, which for a one-line-per-row container is the
     # whole title. Demanded by `wrap.engine_lays_out` where it decides.
     'engine_wraps': None,
+    # Families whose CONTAINER is a byte buffer rather than a table of display
+    # lines, so the engine wraps them even when the title-wide `engine_wraps` is
+    # false. Per-family because one title can hold both: this disc stores script
+    # and database text as one display line per record, while the executable
+    # stores whole messages as NUL-terminated slots that the patch overwrites
+    # wholesale. Measured on Classic Dungeon X2 - the executable's own source
+    # lines reach 511px on a 480px screen, which cannot be one display line, so
+    # applying the record rule there refused correct translations and demanded
+    # text that would not fit the sentence. Declared, never inferred: a genuine
+    # one-line-per-record family looks identical from here, and exempting one of
+    # those would let real overflow through.
+    'engine_wraps_families': [],
     # tokeniser used to detect source text copied verbatim into the target
     'copied_spans_tokenizer': 'latin',
     # source script surviving in the target; None means AUTO: 'off' for `en`,
@@ -307,6 +320,20 @@ DEFAULT_PROFILE = {
     # reference title's 384 lives in its own profile because that is where a
     # measurement belongs.
     'budget': {},
+    # Whether the numbers in `budget` are the WIDTH OF THE BOX or merely the widest
+    # line the container has been seen to draw. The two demand opposite treatment
+    # and the pipeline cannot tell them apart by looking:
+    #   false/absent - the budget is a measured box, so a row may legitimately use
+    #     all of it. DQ7 measured 321px for its dialogue frame and its rows fill it.
+    #   true - the budget is a LOWER BOUND assembled from the shipped text, so it
+    #     is the widest row anywhere in the family and says nothing about the box any
+    #     individual row renders in. Then each row's own source lines are the only
+    #     evidence about that row's own box, and `wrap.row_layout` enforces them.
+    # Measured on Classic Dungeon X2, whose budgets are source-derived: a 459px
+    # Korean line sat in a 267px string-table slot on a 480px screen, ran off both
+    # edges, and passed the family check because some other slot in the same family
+    # renders 800px. 376 rows shipped that way.
+    'budget_is_lower_bound': False,
     'capacity': {},
     # fonts used for measurement (relative to the project)
     'font_src': [],
