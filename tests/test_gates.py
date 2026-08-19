@@ -2090,6 +2090,12 @@ if _HAVE_EW_FONT:
     case('a blank line before the text keeps the text where the source drew it',
          _pprobs == [] and _pos.split('\n')[:2] == ['', '']
          and _pos.split('\n')[2].strip())
+    # A lone substitution tag is a line of content: the engine draws a number or a
+    # name there. Counting it blank measured eboot.elf/off241da8 as 5 lines where
+    # the container draws 6 and refused a correct translation.
+    case('a line holding only a substitution tag counts as a drawn line',
+         _measured(lambda: wrap.row_line_slots('\uac00\ub098\n{HERO}\n\ub2e4\ub77c')
+                   == [0, 1, 2]))
     # Refusal, not silent shortening: only a translator can decide what to drop.
     _over, _oprobs = _row(_ROW_SRC, '\uac00\ub098 ' * 40)
     case('Korean that cannot be broken onto its own source lines is refused',
