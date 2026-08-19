@@ -141,7 +141,8 @@ def assert_budget_matches_evidence(evidence):
     contradicted = sorted(
         (family, width, resolved.get(family, resolved['default']))
         for family, (width, lines) in evidence.items()
-        if lines >= EVIDENCE_LINES and width > 0
+        if not family_engine_wraps(family)
+        and lines >= EVIDENCE_LINES and width > 0
         and width * EVIDENCE_RATIO < resolved.get(family, resolved['default']))
     if not contradicted:
         return
@@ -512,6 +513,34 @@ def title_lays_out_own_text():
     return config.prof('engine_wraps')
 
 
+def row_draws_its_own_lines(en):
+    """True when THIS row's stored lines are the display lines the player sees.
+
+    Three facts have to hold, and each is declared or measured elsewhere: the row
+    carries a line break of its own, so the container drew more than one line for
+    it; the title declares that the container owns layout; and the title declares
+    that its family budgets are lower bounds rather than measured boxes. Only then
+    are the row's own lines the BEST evidence available about the row's own box -
+    see `row_budget` and `row_line_slots`.
+
+    That last condition is what keeps this from breaking a title whose box really
+    was measured. DQ7 measured 321px for its dialogue frame and its rows fill it;
+    holding those rows to the widest line each one happens to draw would refuse
+    7980 correct translations. Classic Dungeon X2 has no measured box at all - its
+    budgets are the widest line each family renders - so there the row is all the
+    evidence there is.
+
+    A separate predicate from `engine_lays_out` because it answers a different
+    question. That one asks whether a row may be measured AT ALL; this one asks
+    whether the row measures itself. Undeclared (`engine_wraps` absent) answers
+    False here rather than raising: a title that has not declared it is refused by
+    `engine_lays_out` on its first unbroken row, and raising here as well would
+    turn one clear refusal into two.
+    """
+    return (not is_freeform(en) and title_lays_out_own_text() is False
+            and bool(config.prof('budget_is_lower_bound')))
+
+
 def engine_lays_out(en):
     """True when this row is the ENGINE's to lay out, so we must not measure it.
 
@@ -639,6 +668,31 @@ def transplant_breaks(en, ko):
     return ''.join(out)
 
 
+def family_engine_wraps(kind):
+    """Does the ENGINE lay out this family, against the title-wide declaration?
+
+    `engine_wraps` is one boolean for a whole title, and it is derived from the
+    container the title's text mostly lives in. A title can nonetheless hold a
+    SECOND container with the opposite property, and then the title-wide answer is
+    wrong for it in the direction that blocks correct translations.
+
+    Measured on Classic Dungeon X2. The title declares `engine_wraps: false`,
+    which is right for the script: one stored line is one display line, so a
+    translation that re-flows cannot be stored. The executable is not that. Its
+    strings are NUL-terminated byte slots overwritten whole, and its own source
+    lines are up to 511px wide on a 480px screen - physically impossible as one
+    display line, so the engine demonstrably wraps them. Under the title-wide rule
+    those rows are unstorable no matter what they say: the Japanese itself rewraps
+    from 2 stored lines to 3 display lines, so the check refused every possible
+    translation of them, including a faithful one.
+
+    Declared per family, never inferred: the same shape - a long row with one
+    newline - occurs in both containers, and exempting the wrong one disables the
+    line-count rule where it is the only thing preventing a corrupt record.
+    """
+    return kind in set(config.prof('engine_wraps_families') or ())
+
+
 def composed(kind):
     """Whether this container stores FRAGMENTS the engine joins before drawing.
 
@@ -687,12 +741,108 @@ def width_advisory(kind):
     return kind.startswith('@')
 
 
+def row_line_slots(page):
+    """Indexes of the lines this source page actually draws text on.
+
+    Blank lines are not filler: where the container stores one display line per
+    record line, a leading blank is vertical POSITION. `db__STRTBL.DAT/s756`
+    stores eleven empty lines and then `ＳＰが全回復した！`, which is how that
+    message reaches the bottom of its box. A translation that puts its text on
+    line 1 and the blanks after it renders in the wrong place on the screen even
+    though the line count matches.
+    """
+    return [i for i, line in enumerate(page.split('\n'))
+            if TAG.sub('', line).strip()]
+
+
+def row_budget(page):
+    """The widest line this source page itself draws, in px.
+
+    A family budget cannot answer this question. A string table sizes every slot
+    independently, so the widest line anywhere in the family belongs to some other
+    slot's box: `db__STRTBL.DAT` runs to ~800px while `s22` renders in 267px, and a
+    459px Korean line in that 267px box passed the family check and ran off both
+    edges of a 480px screen. The row's own drawn lines are the only evidence about
+    the row's own box - the container drew them, so each is a proven lower bound.
+    """
+    return max((text_width(line) for line in page.split('\n')), default=0)
+
+
+def row_layout(en, ko):
+    """Re-flow `ko` into the line slots `en` uses, at `en`'s OWN line width.
+
+    Only for a row whose SOURCE carries a line break, and only where the container
+    stores one display line per record line. There the source's own lines are two
+    measured facts about this row: how wide its box is (`row_budget`) and where in
+    the box its text sits (`row_line_slots`).
+
+    This replaces padding with placement. Padding made the stored line COUNT match
+    by appending blanks, which a 2-line source satisfies with all its text on one
+    line - so 376 rows shipped as one long line, clipped by the box, and the gate
+    reported them clean. Returns (new_ko, problems); a row whose Korean cannot be
+    broken to fit its own source's lines is REFUSED here rather than shortened by
+    guesswork, because only a translator can decide what to drop.
+    """
+    src_pages = re.split(r'<page>', en)
+    ko_pages = re.split(r'<page>', ko)
+    if len(ko_pages) != len(src_pages):
+        return ko, [f'page count {len(ko_pages)} != source {len(src_pages)}']
+    out, probs = [], []
+    for i, (src, page) in enumerate(zip(src_pages, ko_pages)):
+        slots = row_line_slots(src)
+        budget = row_budget(src)
+        lines = src.split('\n')
+        body = ' '.join(line.strip() for line in page.split('\n')
+                        if TAG.sub('', line).strip())
+        if not slots or budget <= 0 or not body:
+            out.append(page)
+            continue
+        for word in overlong_units(body, budget)[:1]:
+            probs.append(f'"{word}" is {unit_width(units(word)[0]):.0f}px and this '
+                         f'row\'s own source draws {budget:.0f}px lines, so it would '
+                         f'have to break inside the word (shorten it)')
+        wrapped = [ln for ln in rewrap(body, budget, soft=True).split('\n') if ln]
+        if len(wrapped) > len(slots):
+            probs.append(f'page {i + 1} needs {len(wrapped)} lines of {budget:.0f}px, '
+                         f'which is the widest line this row\'s own source draws, but '
+                         f'the source draws only {len(slots)} line(s) of text here '
+                         f'(shorten the translation)')
+            out.append(page)
+            continue
+        placed = [''] * len(lines)
+        for slot, text in zip(slots, wrapped):
+            placed[slot] = text
+        out.append('\n'.join(placed))
+    new = '<page>'.join(out)
+    for head in prohibited_line_starts(new)[:1]:
+        probs.append(f'a display line would open on "{head}", which may not start '
+                     f'a Korean line (move it up or reword)')
+    return new, probs
+
+
 def fits(en, ko, kind, group=None):
     """Return (rewrapped_ko, problems)."""
     if composed(kind):
         return ko.replace('\n', ' '), []
     if width_advisory(kind):
         return ko.replace('\n', ' '), []
+    # A source row that carries its own line break is measured against ITSELF, and
+    # before anything else, because the two facts it proves are narrower than any
+    # family-wide number: the width of this row's box and where in the box its text
+    # sits. This runs ahead of `family_engine_wraps` deliberately. That declaration
+    # exists for rows with no break of their own, where there is genuinely nothing
+    # to measure; using it to skip a row the container DID draw is what left 34
+    # clipped lines in `eboot.elf`. Re-flowing them is safe under either reading of
+    # that family - an engine that wraps re-wraps our lines anyway, and one that
+    # clips needs exactly this.
+    if row_draws_its_own_lines(en):
+        return row_layout(en, ko)
+    # The engine owns layout for this family, so the stored newlines are content
+    # rather than display lines: keep them exactly as authored. Width and line
+    # count are not enforceable here - there is no measured box - and the real
+    # constraint on these rows, the byte budget, is enforced in `translate.check`.
+    if family_engine_wraps(kind):
+        return ko, []
     budget = budget_for(kind)
     if engine_lays_out(en):
         return ko.replace('\n', ' '), []
