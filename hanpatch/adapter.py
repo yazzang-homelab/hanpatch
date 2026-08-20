@@ -89,6 +89,23 @@ class Adapter(abc.ABC):
 
     # -- optional hooks -----------------------------------------------------
 
+    def write_plan(self, rom, entries):
+        """Declare every byte this adapter will write, or None to opt out.
+
+        `verify` proves each sealed entry survived. It says nothing about bytes
+        nobody declared, so an adapter that writes its text correctly and also
+        clobbers a reserved field passes verification. Returning a
+        `expected_write.WritePlan` here lets the pipeline check that too: the
+        source held what the plan expected, no two writes overlap, nothing lands
+        in a protected span, and the built artifact differs only inside declared
+        regions.
+
+        Default None. A title that has not declared its write surface is simply
+        not checked this way - the pipeline records that it was not, rather than
+        reporting a guarantee it never obtained.
+        """
+        return None
+
     def build_fonts(self):
         """Generate target-language fonts. Default: nothing to do."""
         return []

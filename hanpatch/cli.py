@@ -144,6 +144,8 @@ def cmd_qa(args):
         argv += ['--batch', str(args.batch)]
     if args.judges:
         argv += ['--judges', str(args.judges)]
+    if args.models:
+        argv += ['--models', args.models]
     return qa.main(argv) or 0
 
 
@@ -158,6 +160,123 @@ def cmd_build(args):
     _p(f"{st['translated']}/{st['total']} strings replaced, "
        f"{st['skipped']} skipped, {st['size']} bytes")
     _p(rep['rom'])
+    return 0
+
+
+def cmd_stages(args):
+    """Print the staged QA ledger.
+
+    The ledger records what each stage proved and, as carefully, what it did
+    not. A ledger nothing ever displays is a file the pipeline writes to itself,
+    so this is the surface that makes NOT_RUN visible to the person deciding
+    whether to ship.
+    """
+    from hanpatch import stage_ledger
+
+    if not stage_ledger.enabled():
+        _p('this title has not opted into staged QA '
+           '(no qa_upgrade object in the profile)')
+        return 0
+
+    try:
+        doc = stage_ledger.load()
+    except stage_ledger.LedgerError as err:
+        _p('NO LEDGER - %s' % err)
+        return 1
+
+    summary = stage_ledger.summary(doc)
+    width = max(len(t) for t in stage_ledger.TOKENS)
+    for token in stage_ledger.TOKENS:
+        entry = doc['tokens'][token]
+        line = '  %-*s %-8s' % (width, token, summary[token])
+        note = entry.get('reason') or entry.get('evidence')
+        if entry.get('checked'):
+            line += ' checked=%s' % entry['checked']
+        if note:
+            line += '  %s' % note
+        _p(line)
+
+    stale = stage_ledger.is_stale(doc)
+    if stale:
+        _p('')
+        for problem in stale:
+            _p('STALE: %s' % problem)
+
+    prior = doc.get('priorFailures') or []
+    if prior:
+        _p('')
+        _p('prior failures carried across resets:')
+        for row in prior:
+            _p('  %s: %s' % (row.get('token') or 'unreadable ledger',
+                             row.get('reason')))
+    return 0
+
+
+def cmd_hostrows(args):
+    """Export the sealed text as host rows for a voice reviewer.
+
+    The language map is required rather than inferred. Guessing which language
+    fills the evidence column produces a document that looks correct from both
+    sides while the axes are transposed, and nothing downstream can detect it.
+    """
+    from hanpatch import config, interop, manifest
+
+    # Default the axes from the profile's own declaration. A free-text label on
+    # the command line over a hardcoded source column is how a project ends up
+    # claiming `en` for rows that hold Japanese, which is exactly the transposed
+    # export LanguageMap exists to prevent.
+    profile = config.profile()
+    evidence_lang = args.evidence_lang or profile.get('source_lang')
+    target_lang = args.target_lang or profile.get('target_lang')
+    if not evidence_lang or not target_lang:
+        _p('NO LANGUAGE MAP - pass --evidence-lang and --target-lang, or '
+           'declare source_lang and target_lang in the profile')
+        return 1
+
+    try:
+        languages = interop.LanguageMap(evidence=evidence_lang,
+                                        target=target_lang,
+                                        pivot=args.pivot_lang)
+    except interop.InteropError as err:
+        _p('BAD LANGUAGE MAP - %s' % err)
+        return 1
+
+    # The extracted source is `family -> [ {key, en, ...}, ... ]`, and the
+    # sealed manifest keys those rows as `family/key`. Reading it as a flat
+    # mapping produced a source table whose keys matched nothing, so every
+    # export failed on the first entry.
+    source = config.load_object(config.src_path(), 'the extracted source')
+    source_entries = {}
+    for family, items in source.items():
+        if not isinstance(items, list):
+            _p('BAD SOURCE - family %r is %s, expected a list of rows'
+               % (family, type(items).__name__))
+            return 1
+        for item in items:
+            if not isinstance(item, dict) or 'key' not in item:
+                _p('BAD SOURCE - a row in family %r has no key' % family)
+                return 1
+            # The source column name is the adapter's, not a guess: a project
+            # whose extractor writes Japanese under 'en' would otherwise export
+            # rows labelled with the wrong language.
+            column = profile.get('source_column', 'en')
+            if column not in item:
+                _p('BAD SOURCE - row %r in family %r has no %r column'
+                   % (item['key'], family, column))
+                return 1
+            source_entries['%s/%s' % (family, item['key'])] = item[column]
+
+    try:
+        doc = interop.export_from_manifest(languages, source_entries)
+    except (interop.InteropError, SystemExit) as err:
+        _p('EXPORT FAILED - %s' % err)
+        return 1
+
+    out = args.out or config.out('host-rows.json')
+    interop.write(doc, out)
+    rows = sum(len(v) for v in doc['families'].values())
+    _p('wrote %d row(s) in %d famil(y/ies) to %s [%s]'
+       % (rows, len(doc['families']), out, doc['direction']))
     return 0
 
 
@@ -437,6 +556,13 @@ def main(argv=None):
     s.add_argument('--workers', type=int)
     s.add_argument('--batch', type=int)
     s.add_argument('--judges', type=int)
+    # `qa.main` has always taken a lane list; not declaring it here made the
+    # only way to judge on a chosen pool editing the module. That matters when
+    # most of the default pool is rate-limited or returning malformed output:
+    # the run then burns its attempts on dead lanes and reports zero verdicts.
+    s.add_argument('--models', default='',
+                   help='comma-separated judge lanes to use instead of the '
+                        'default pool')
     s.set_defaults(fn=cmd_qa)
 
     s = sub.add_parser('build', help='gates + inject -> patched ROM')
@@ -448,6 +574,22 @@ def main(argv=None):
     s = sub.add_parser('verify', help='re-read the built ROM')
     s.add_argument('--rom')
     s.set_defaults(fn=cmd_verify)
+
+    s = sub.add_parser('stages', help='show the staged QA ledger')
+    s.set_defaults(fn=cmd_stages)
+
+    s = sub.add_parser('hostrows',
+                       help='export sealed text as host rows for voice review')
+    s.add_argument('--evidence-lang',
+                   help='language filling the evidence column; defaults to the '
+                        'profile source_lang, never inferred from content')
+    s.add_argument('--target-lang',
+                   help='language of the shipped text; defaults to the profile '
+                        'target_lang')
+    s.add_argument('--pivot-lang', default=None,
+                   help='optional pivot language; requires pivot rows')
+    s.add_argument('--out')
+    s.set_defaults(fn=cmd_hostrows)
 
     s = sub.add_parser('book', help='render the bilingual script book')
     s.add_argument('--out')

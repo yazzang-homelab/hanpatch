@@ -162,7 +162,32 @@ def create(out=None, rom=None, built=None, notes=None):
             entries=info['entries'], digest=info['digest'][:16]))
     info['bundle'] = out
     info['size'] = os.path.getsize(out)
+    _record_package(info)
     return info
+
+
+def _record_package(info):
+    """Report the packaging step to the staged ledger, if one is active.
+
+    The ledger observes; `create` above remains the only authority on whether a
+    bundle exists. A token nobody writes is a claim nobody checked, which is why
+    this exists rather than the ledger asserting PATCH_PACKAGE on its own.
+    """
+    try:
+        from hanpatch import stage_ledger
+        if not stage_ledger.enabled():
+            return
+        stage_ledger.record(
+            'PATCH_PACKAGE', stage_ledger.PASS,
+            evidence=os.path.basename(info.get('bundle') or ''),
+            checked=info.get('entries'),
+            reason='release.create wrote the bundle; the ledger records it')
+    except Exception as err:  # pragma: no cover - defensive
+        # A refusal is not a malfunction. The guard declining to pass PATCH_PACKAGE
+        # over an earlier failure is a fact the operator should read as one.
+        from hanpatch import stage_ledger as _sl
+        kind = ('refused' if isinstance(err, _sl.LedgerError) else 'could not record')
+        print('stage ledger: %s PATCH_PACKAGE: %s' % (kind, err), flush=True)
 
 
 def inspect(bundle):

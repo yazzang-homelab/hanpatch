@@ -38,7 +38,7 @@ config / profile   what this title is, where its files are, its markup grammar
 core               glossary, translation, layout, audit, manifest, QA gates
                    — no knowledge of any container format
 adapter            extract / inject / verify for one title on one platform
-platform+format    CIA/NCCH/RomFS/BCFNT, archive and message readers
+platform+format    container, filesystem and font readers; archive and message formats
 ```
 
 The core never reads a ROM. An adapter never decides wording — the test suite
@@ -79,6 +79,128 @@ Then the packer **re-runs the QA validation in-process** before writing a byte.
 The approval token is a convenience; the authority is the fresh revalidation.
 Editing the manifest and the token together still fails.
 
+## Staged QA state, for titles that opt in
+
+A gate report says a gate passed. It does not say which release-stage claim that
+pass supports, and it does not say what remains unproven. Reading a green gate
+run as "the patch is verified" is the mistake the staged ledger exists to make
+impossible.
+
+`stage_ledger` records eight staged tokens separately — source QA, static binary
+QA, RC build, RC readback, runtime smoke, canonical promotion, patch package,
+release — and a token only leaves `NOT_RUN` when something actually proved it.
+Three rules give it its shape.
+
+**Existing authority is mapped, never re-implemented.** Most tokens are already
+proven by code that ships: readback by `pipeline.verify` plus the title adapter,
+packaging by `release.create`, publication by `channel.publish`, source QA by the
+glossary/audit/qagate gates. Those rows are marked `mapping_only`; each of those
+functions reports to the ledger after it has decided, and the ledger records what
+it decided. It never becomes a second approval, packaging or publishing
+authority, and a test asserts it exposes no verb that could.
+
+`CANONICAL_PROMOTION` is the exception and stays `NOT_RUN` unless someone records
+it. Promoting a release candidate to canonical is a judgement about whether the
+patch is good enough to be the one people install, and no function in this
+pipeline makes it. A token that filled itself in would be asserting that
+judgement had happened.
+
+**Pipeline success is not eight passes.** One gate moves one token. There is
+deliberately no "the run finished, mark everything green" path, because the two
+tokens that most tempt one — runtime smoke and canonical promotion — are exactly
+the ones static success cannot establish. A fully green static run still leaves
+both at `NOT_RUN`.
+
+**A first failure stops the downstream claim.** A failed token forces every later
+token to `NOT_RUN` with the failing token named, so a ledger can never show a
+later stage passing on top of an earlier failure.
+
+The ledger is a sibling of `manifest.json`, not a field inside it: carrying one
+would change `RULESET`, and that invalidates every seal already shipped. Binding
+is by reference — the ledger records the manifest digest and the built artifact
+hash it describes, and reports staleness rather than silently re-binding.
+
+All of this is opt-in through a versioned profile object. Absent or null is the
+legacy path: no ledger code runs and no sidecar appears, proven in a subprocess
+with call spies and a clean output directory.
+
+### What a new title declares
+
+Everything above is opt-in, and a title that declares nothing keeps the legacy
+behaviour exactly. Five declarations exist; none requires any of the others.
+
+| Declaration | Where | Effect when absent |
+|---|---|---|
+| `qa_upgrade: {schema_version: 1}` | profile | no ledger, no sidecar, no calls |
+| `write_plan(rom, entries)` | adapter method | byte ownership not checked, and the ledger says so |
+| `voice_contract` + `voice_authority` | profile | voice reads `NOT_DECLARED` and passes |
+| `runtime_evidence` | profile, path or list of paths | `RUNTIME_SMOKE` stays `NOT_RUN` |
+| `source_lang` / `target_lang` | profile | `hostrows` requires the axes on the command line |
+
+`qa_upgrade` is the only one that gates the others: without it no staged QA runs
+at all. The rest are independent, so a title can adopt byte ownership without
+having a voice contract, or submit runtime evidence without declaring a write
+plan.
+
+Read the result with `hanpatch stages`. It prints every token with its status
+and, for anything that did not run, the reason — which is the point: a token
+that reads `NOT_RUN` is telling you what nobody proved.
+
+## Byte ownership, beside entry verification
+
+`Adapter.verify` asks whether each sealed string survived the round trip. A build
+can answer that perfectly and still be broken: write the right text into the right
+slots, and also clobber a reserved header byte. Verify returns clean, because
+nothing in the entry contract looks at bytes nobody declared.
+
+`expected_write` asks the byte-centric question. A write plan declares, per
+region, where it writes, how long it is, what it expects to find there first, and
+who owns it — then refuses four separate ways: the source did not hold what the
+plan expected, two owners claim the same bytes, a write lands in a protected span,
+or the final artifact differs somewhere no entry covers.
+
+Preconditions are exact — literal bytes or their digest, never a wildcard —
+because a plan that can match anything cannot prove it matched the right thing.
+And the checker takes the source and final bytes as inputs; it never asks the
+writer what it wrote, because a checker fed the writer's own account can only
+confirm the writer agrees with itself.
+
+One limit worth stating: a v1 plan describes writes in place, so a build that
+changes the artifact's length is refused rather than checked. That covers the
+fixed-slot and fixed-arena containers this was built against; a format that
+grows its payload needs the plan to carry relocation, which v1 does not.
+
+The two questions are complementary, not redundant, and the difference is
+demonstrated rather than asserted: a fixture where declared text is entirely
+correct and container integrity is valid, one reserved byte is clobbered, entry
+verification returns clean and byte ownership refuses.
+
+## Runtime evidence: shape enforced, story not
+
+No static gate can establish that a patched game runs, and what counts as a
+meaningful observation depends entirely on the title. The first line of dialogue
+proves something in an RPG and nothing in a puzzle game.
+
+So `runtime_evidence` validates shape and refuses to have an opinion about
+content. Scenario, expected and observed are opaque JSON: no scene enum, no
+required step names, no notion of what a good smoke test looks like. Baking any
+of that in encodes one genre's idea of proof into a checker every other genre has
+to satisfy.
+
+What is enforced is title-independent: the document says which build it describes
+and that hash must match, required fields exist with the right types, hashes are
+hashes, depth and volume stay bounded, and the result is one of two words.
+
+`NOT_RUN` is deliberately not one of them. It is a ledger state meaning nobody
+looked, so a submitted document may never claim it. Absent evidence produces
+`NOT_RUN` and nothing else — there is no code path that manufactures a passing
+envelope, because a synthetic pass is indistinguishable from a real one once
+written down.
+
+Collecting that evidence is the operator's job, by whatever means the platform
+allows. The pipeline stays emulator-free and has no dependency on any emulator
+tooling; where one is useful, the skill points at it and stops there.
+
 ## Ideas worth stealing even if you never run this
 
 **Capacity comes from the shipped text, not a guess.** The widest page the
@@ -91,42 +213,33 @@ mandatory in the families that render them as UI labels and *forbidden* as
 mandates inside narrative prose, where they are ordinary words.
 
 **A particle after a runtime substitution has no single right answer, so stop
-asking the model for one.** Where a row carries `{HERO}` or `{I_NAME}`, the
-syllable the Korean particle agrees with does not exist until the engine draws
-the line. Measured on the shipped DQ7 corpus: 2416 rows had a particle welded to
-a substitution token and every one had been guessed — 1084 `는` against 500 `은`,
-364 `가` against 121 `이` — so roughly half of them read `아루스은` for some player.
-A further 506 rows carried a hand-written both-forms particle in four different
-shapes. `josa.auto` decides all of it deterministically: the token's rendering is
-resolved from the profile's `substitution_values` where the title declares that it
-is FIXED (a party member the player cannot rename), otherwise the both-forms
-particle `은(는)` / `(으)로` is written in one canonical shape, and a particle with
-no readable both-forms shape (`이었다`/`였다`) is REFUSED so the row is reworded
-rather than shipped wrong. `placeholder_text` is not evidence of a fixed value —
-it holds one example rendering for the script book's search, and its `{HERO}` entry
-is a name the player replaces. `josa.resolve()` is the single seam an engine-side
-run-time josa hook would replace; this build has no such hook, so the both-forms
-rendering is what actually ships and the skill does not pretend otherwise.
+asking the model for one.** Where a row carries a substitution token, the
+syllable an agreeing particle attaches to does not exist until the engine draws
+the line, so any particle written at build time is a guess that is wrong for some
+player. Resolve it deterministically instead: take the rendering from the
+profile where the title declares the value FIXED (a party member the player
+cannot rename), otherwise write the both-forms particle in one canonical shape,
+and REFUSE a particle with no readable both-forms shape so the row is reworded
+rather than shipped wrong. Example-rendering fields are not evidence of a fixed
+value. Keep the resolver behind one seam, so an engine-side run-time hook can
+replace it later without the pipeline pretending it already has one.
+Measured counts: `references/cases.md`.
 
 **A line may not break inside a word, and may not open on a closing mark.** The
 wrapper breaks between *units*, and a unit is everything with no whitespace in
-it — a substitution token and the particle welded to it move together. Measured
-before that held: 58 shipped rows put a runtime name at the end of one line and
-its particle at the head of the next (the player reads `아루스`, then a line starting
-`에게`), and 116 rows opened a line on punctuation. A word wider than the box is
-*refused*, not split: the old fallback emitted a break character-by-character and
-raised no problem, which is exactly "단어 중간에서 줄이 넘어간다" with the gate
-reporting clean.
+it — a substitution token and the particle welded to it move together. A word
+wider than the box is *refused*, not split: a fallback that breaks character by
+character raises no problem while producing exactly the defect a reader
+reports, with the gate claiming clean. Measured counts: `references/cases.md`.
 
-**Japanese punctuation is converted, and a sentence does not end twice.** The
-kuten `。` becomes `.`, the touten `、` becomes `,`, the fullwidth wave dash becomes
-`~` — and then the converted stop is dropped where the sentence already ended in
-`…`, `!`, `?` or `~`. Measured: 7795 shipped rows carried `….` and 470 `~.`, 7905
-in all, every one of them this pipeline's own rendering of `……。` and `～。`.
-Scoped to a Japanese source, because the reference title authors fullwidth
-punctuation deliberately as an inner-monologue device. Whitespace in front of a
-closing mark goes with it — a wrapper that breaks at spaces is how ` ……` becomes a
-line that starts on an ellipsis.
+**Source punctuation is converted, and a sentence does not end twice.** Where the
+source script uses punctuation the target language renders differently, convert
+it — and then drop the converted stop where the sentence already ended in an
+ellipsis or an exclamation. Scope this to the source language that actually needs
+it; a title that authors such punctuation deliberately as a stylistic device must
+not have it normalised away. Whitespace in front of a closing mark goes with it,
+because a wrapper that breaks at spaces is how a leading ellipsis appears.
+Measured counts: `references/cases.md`.
 
 **A gate that only normalises cannot fail, so audit compares the seal against
 its own rules.** `translate.check` returns a repaired string, and `audit` used to
@@ -138,8 +251,8 @@ manifest `RULESET` is bumped whenever those rules change so an old seal cannot b
 packed.
 
 **Two judges minimum, and a producer may not judge its own output.** One judge
-produces correlated false negatives — a reviewer sample found 4 real defects in
-5 strings a single judge had passed. Judge verdicts are structured
+produces correlated false negatives: a reviewer sample found real defects in strings a
+single judge had passed (`references/cases.md`). Judge verdicts are structured
 (`pass|defect|policy`), never keyword-sniffed from prose, and an invalid or
 missing disposition is *dropped* so the row stays pending and rotates providers,
 rather than being synthesised into a pass.
@@ -152,11 +265,13 @@ waiver needs a category and a real reason.
 exists in the font that ships, verified by reading the packed font back out of
 the ROM — not because it is in some Unicode range.
 
-**Measure the format before writing it.** The 3DS font sheets are RGBA4444
-where `A` is ink coverage and `RGB` is a shading mask the engine multiplies with
-the text colour. The naive `255 - coverage` inverse yields flat-black glyphs with
-a bright rim. The correct LUT was *measured off the shipped font*. Guessing a
-binary format's semantics costs a whole rebuild cycle.
+**Measure the format before writing it.** A pixel format's field names do not
+tell you what the engine does with them: a channel that looks like alpha may be
+ink coverage the renderer multiplies against a shading mask, and the obvious
+inverse then produces glyphs that are visibly wrong in a way no gate catches.
+Derive the mapping from the shipped asset rather than from the format name.
+Guessing a binary format's semantics costs a whole rebuild cycle. The measured
+3DS case is in `references/3ds.md`.
 
 ## Adding a title
 
@@ -276,19 +391,18 @@ common habit. Either is defensible; only one may ship.
 ## The QA repair cycle
 
 A judge verdict is about one exact pair: the source and *the value that ships*. Everything
-below is measured on a closed cycle of 65836 pairs, not inferred.
+below was measured on a closed cycle, not inferred; the counts are in
+`references/cases.md`.
 
 **Freshness is decided against the sealed artifact.** A build that resolves overrides or
 post-processes text makes the sealed value differ from the raw translation store, so
-comparing verdicts against the raw store discards real complaints as stale — here it left
-449 of 13788 actionable and would have reported the repair pass complete. Print the flagged
-count and the actionable count together; a large silent gap between them is an authority bug,
-not progress.
+comparing verdicts against the raw store discards real complaints as stale and can report a
+repair pass complete while most of it is untouched. Print the flagged count and the
+actionable count together; a large silent gap between them is an authority bug, not progress.
 
 **Repair, reseal and re-judge are one cycle.** The panel only ever reads the sealed
 artifact, so a repaired value that was never resealed is invisible and the next pass
-reproduces the same complaints forever. One closed cycle here: 9810 rows repaired, manifest
-resealed, panel re-run, actionable 13788 -> 8856.
+reproduces the same complaints forever.
 
 A repaired value is a NEW pair and therefore arrives with no verdicts, which is what keeps
 the loop honest — an unhelpful repair is judged again from scratch instead of inheriting the
@@ -300,8 +414,8 @@ that reports every pair at one judge has not failed, it has finished one pass.
 
 **Exclude judges per row, never per batch.** A judge may not score its own output. Applying
 that test to the whole batch starves a small pool: a mixed batch excludes every lane, and
-those pairs never reach the required panel size no matter how many passes run. Twenty pairs
-sat unjudged across three full passes until the test moved to the row.
+those pairs never reach the required panel size no matter how many passes run. Pairs sat
+unjudged across full passes until the test moved to the row (`references/cases.md`).
 
 **One panel per verdict file.** Each batch rewrites the whole document from the process's
 own copy, so two concurrent panels do not merge — the later writer discards the other's
@@ -343,13 +457,14 @@ by copy-paste.
 A supervisor exists to notice that work stopped, so it must be harder to kill than the work
 it supervises. Catch the *exits*, not just the exceptions: loaders that raise `SystemExit`
 on a malformed document are right for a CLI and fatal inside a supervisor. One transient bad
-read of a 40MB verdict file ended supervision here while the repair loop kept running
-unobserved; after the fix the supervisor detected a dead loop and restarted it on its own.
+read of a large verdict file ended supervision while the repair loop kept running
+unobserved; after the fix the supervisor detected a dead loop and restarted it on its own
+(`references/cases.md`).
 
 **A supervisor cannot supervise its own death.** In-process robustness only covers failures
 the process survives. This one was killed outright with no log line, and the repair cycle
-then sat dead for five hours while every artifact on disk still looked healthy and the last
-log line still read `repair=up`. Run the supervisor under an out-of-process manager with
+then sat dead for hours while every artifact on disk still looked healthy and the last log
+line still read `repair=up` (`references/cases.md`). Run the supervisor under an out-of-process manager with
 automatic restart, and verify the restart by killing it — not by reading the config.
 
 **A hung unit must not end the pass.** A per-unit timeout that raises out of the loop turns
@@ -401,20 +516,23 @@ State these rather than implying coverage:
 
 ## Containers and keys
 
-Accepts CIA, CCI/`.3ds` cartridge dumps, and bare NCCH. Handles every documented
-NCCH crypto method (0, 1, 10, 11), fixed/zero key, seed crypto, and title-key
-encrypted CIA content.
+A patched build has to be repackaged into whatever container the platform ships,
+and that container is usually encrypted. Two habits are worth copying wherever
+you meet one.
 
-**Key material is the operator's.** Nothing is bundled. Point `HANPATCH_KEYS` at
-a directory with `boot9.bin`, `keys.txt` or `seeddb.bin`, or drop them in
-`<project>/keys/`, and run `hanpatch keys` to see which slots resolved. Crypto
-method 0 needs nothing at all.
+**Key material is the operator's.** Bundle none of it. Take a path from the
+environment or the project directory, and give the operator a command that says
+which slots resolved, so a missing key is a clear message rather than a corrupt
+output.
 
-Two habits worth copying: the bootROM keyblob is located by **searching for the
-one KeyX that is public knowledge** and indexing off it, so no hardcoded file
-offset can silently drift; and every derived key is **validated by decrypting a
-section and checking its magic**, so a wrong slot fails loudly rather than
-producing plausible garbage.
+**Locate structures by search, and validate by decryption.** Index off a value
+that is public knowledge rather than a hardcoded file offset, which silently
+drifts between revisions; then prove a derived key by decrypting a section and
+checking its magic. A wrong key should fail loudly instead of producing
+plausible garbage.
+
+The 3DS specifics — the container formats accepted, the crypto methods, the
+key filenames, and the `hanpatch keys` command — are in `references/3ds.md`.
 
 ## Distributing the result
 
@@ -426,13 +544,13 @@ hanpatch apply MyPatch.hpk --rom their.cia
 ```
 
 Because the pipeline is deterministic, the recipient's rebuild is byte-identical
-to yours, and the bundle records both hashes so it can prove it. On the reference
-title that is 340 KB reproducing a 249 MB ROM in four seconds.
+to yours, and the bundle records both hashes so it can prove it. The bundle is orders of
+magnitude smaller than the image it reproduces (`references/cases.md`).
 
-Do not reach for a binary delta on an encrypted container. CTR keystreams are
-position-dependent, so one shifted byte kills every downstream match — both
-xdelta3 and a block differ come out at ~82% of the full ROM, which is not a patch,
-it is the game.
+Do not reach for a binary delta on an encrypted container. Position-dependent keystreams
+mean one shifted byte kills every downstream match, and the delta comes out close to the
+size of the whole image, which is not a patch, it is the game. Container specifics and the
+measured ratio: `references/3ds.md`, `references/cases.md`.
 
 Publish the bundle to an **update channel** so a fix reaches the people already
 running the old text:
@@ -453,30 +571,21 @@ standalone `hpk-update.py` safe to hand to a stranger. Do not answer "is there a
 newer patch" with a service that must be operated and authenticated; the answer
 is a file.
 
-On real hardware a rebuilt image is the wrong shape: the cartridge is read-only and
-a rebuilt NCSD no longer matches the signature covering its headers, so a retail
-console refuses it. Ship a **LayeredFS pack** instead — `hanpatch luma` writes the
-changed RomFS files plus a `code.ips` under `luma/titles/<TitleID>/`, which Luma3DS
-reads off the SD card with game patching enabled. Measured on DQ7: 379 files,
-39.5 MB and a 70-byte IPS instead of a 2 GB reinstall, every file verified
-byte-identical to the same path inside the rebuilt ROM (`--verify-rom`). Two traps
-to know: the title id must come from the extracted NCCH header, because a wrong one
-makes Luma patch nothing and looks exactly like "the patch does not work"; and the
-files an adapter rewrites *through a staged symlink* (DQ7's font archives) cannot be
-found by diffing the staged tree against the source, because the write landed in
-the source — the adapter reports them instead. A pack contains game data, so it is
-generated by the player, never published.
+**On real hardware a rebuilt image can be the wrong shape.** Where the medium is
+read-only and a signature covers the headers, a rebuilt image is refused by a
+retail console no matter how correct its contents are. Ship a runtime file-
+replacement pack instead, if the platform's custom firmware offers one: the
+changed asset files plus a code patch, read off storage at boot. The pack
+contains game data, so it is generated by the player and never published. The
+3DS form of this, its two traps, and the measured pack size are in
+`references/3ds.md`.
 
-For people who will not install anything, `web/apply` runs **this same pipeline**
-in wasm (Pyodide): the recipient drops their ROM on a page and the patch is
-applied locally, verified against the author's output hash. Measured: 8 min 6 s
-for a 2 GB 3DS against 2 min 14 s natively, identical sha256. Do not answer
-"make it work in the browser" by porting the container and crypto code to
-JavaScript — a second implementation of a verified pipeline drifts, and the
-drifting copy is the one that ships a corrupt ROM. What the browser actually
-needs is storage: `web/apply/opfs-bridge.js` gives Emscripten a real
-disk-backed filesystem over OPFS, because the scratch space for one 2 GB title
-is 4.3 GB and Pyodide's own native-FS mount mirrors everything into RAM.
+**Do not answer "make it work in the browser" by porting the container and crypto
+code to JavaScript.** A second implementation of a verified pipeline drifts, and
+the drifting copy is the one that ships a corrupt image. Run the same pipeline in
+wasm instead, and give it real storage: an in-memory filesystem mirrors the whole
+scratch space into RAM, which for a large container is several times the image
+size. Measured timings: `references/cases.md`.
 
 ## Legal
 
@@ -513,7 +622,7 @@ repository — a pre-commit hook refuses them.
 
 - `references/adapters.md` — the adapter contract in detail
 - `references/qa-panel.md` — judge panel, dispositions, waivers
-- `references/3ds.md` — CIA/NCCH/RomFS/BCFNT notes and pitfalls
+- `references/3ds.md` — 3DS container, filesystem and font notes, with the pitfalls
 - `references/scriptbook.md` — generating a bilingual script book from the seal
 - `references/evidence-authority.md` — evidence order, conflict rules, readiness axes
 - `references/reports-and-failures.md` — report triage, regression cases, failure ledger

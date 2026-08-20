@@ -110,6 +110,35 @@ that is 250 lines of adapter and one JSON file.
   colour. The naive `255 - coverage` gives flat-black glyphs with a bright rim:
   fine in a PNG, unreadable on hardware.
 
+## Staged QA (opt-in, new titles)
+
+A gate report says a gate passed. It does not say which release-stage claim that
+pass supports, nor what remains unproven. Declaring `qa_upgrade` in a profile
+records eight staged tokens separately: source QA, static binary QA, RC build,
+RC readback, runtime smoke, canonical promotion, patch package, release.
+
+Three rules give it its shape. Existing authority is **mapped, never
+re-implemented** — most tokens are already proven by shipped code, and each of
+those functions reports to the ledger after it has decided, so the ledger never
+becomes a second approval, packaging or publishing authority. **Pipeline success
+is not eight passes** — one gate moves one token, and there is deliberately no
+"the run finished, mark everything green" path, because the two tokens that most
+tempt one, runtime smoke and canonical promotion, are exactly the ones static
+success cannot establish. **A first failure stops the downstream claim.**
+
+The ledger is a sibling of `manifest.json`, never a field inside it: carrying one
+would raise `RULESET` and invalidate every seal already shipped. Read it with
+`hanpatch stages`, which prints the reason for anything that did not run.
+
+Adapters may declare `write_plan(rom, entries)`, which states the bytes they will
+write. `verify` asks whether the declared text survived; this asks whether
+anything undeclared was touched. The two do not overlap: a build that writes
+every string correctly and also clobbers a reserved header byte passes `verify`.
+Returning `None` opts out, and the ledger records that it did.
+
+A title that declares nothing keeps the legacy behaviour exactly — no ledger code
+runs and no sidecar appears.
+
 ## Tests
 
 ```bash

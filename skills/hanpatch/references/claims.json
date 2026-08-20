@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "note": "Machine-checkable claims made by SKILL.md and its references. Each claim names what backs it. 'symbol' claims are checked by tests/test_docs_claims.py, which resolves the named symbols and fails when one is renamed or removed - it verifies the claim still points at real code, NOT that the statement is true of that code. 'human' claims name prose that cannot be reduced to a symbol and is reviewed by a person. Listing a claim as human is not an excuse - it is a statement that the check is a judgement, so the reviewer knows where to look.",
+  "claims": [
+    {
+      "id": "stage-ledger-sibling",
+      "scope": "principle",
+      "statement": "The staged ledger is a sibling of manifest.json and never a field inside it.",
+      "checker": "symbol",
+      "module": "hanpatch.stage_ledger",
+      "symbols": [
+        "LEDGER_NAME",
+        "path",
+        "bootstrap"
+      ]
+    },
+    {
+      "id": "stage-ledger-tokens",
+      "scope": "principle",
+      "statement": "Eight staged tokens are recorded separately, and pipeline success is not eight passes.",
+      "checker": "symbol",
+      "module": "hanpatch.stage_ledger",
+      "symbols": [
+        "TOKENS",
+        "record_gate_stage",
+        "record_failure",
+        "summary"
+      ]
+    },
+    {
+      "id": "stage-ledger-mapping-only",
+      "scope": "principle",
+      "statement": "Tokens already proven by shipped code are marked mapping-only and are not re-implemented.",
+      "checker": "symbol",
+      "module": "hanpatch.stage_ledger",
+      "symbols": [
+        "AUTHORITY",
+        "mapping_only_tokens"
+      ]
+    },
+    {
+      "id": "expected-write-four-refusals",
+      "scope": "principle",
+      "statement": "Byte ownership refuses four separate ways: wrong original bytes, overlapping writes, protected region, unregistered diff.",
+      "checker": "symbol",
+      "module": "hanpatch.expected_write",
+      "symbols": [
+        "WRONG_ORIGINAL",
+        "OVERLAPPING_WRITES",
+        "PROTECTED_REGION",
+        "UNREGISTERED_DIFF",
+        "WritePlan"
+      ]
+    },
+    {
+      "id": "expected-write-independent",
+      "scope": "principle",
+      "statement": "The final check takes source and final bytes and never consults the writer.",
+      "checker": "symbol",
+      "module": "hanpatch.expected_write",
+      "symbols": [
+        "WritePlan.verify_final"
+      ]
+    },
+    {
+      "id": "runtime-evidence-format-only",
+      "scope": "principle",
+      "statement": "Runtime evidence validates shape only; scenario content is opaque and absent evidence is NOT_RUN, never PASS.",
+      "checker": "symbol",
+      "module": "hanpatch.runtime_evidence",
+      "symbols": [
+        "validate",
+        "ledger_status",
+        "RESULTS"
+      ]
+    },
+    {
+      "id": "voice-gate-optin",
+      "scope": "principle",
+      "statement": "The voice gate is profile opt-in; an undeclared profile reports NOT_DECLARED and passes.",
+      "checker": "symbol",
+      "module": "hanpatch.voice_gate",
+      "symbols": [
+        "NOT_DECLARED",
+        "pointer",
+        "evaluate",
+        "summary_line"
+      ]
+    },
+    {
+      "id": "interop-language-map",
+      "scope": "principle",
+      "statement": "Host-row export requires an explicit language map; the axes are never inferred.",
+      "checker": "symbol",
+      "module": "hanpatch.interop",
+      "symbols": [
+        "LanguageMap",
+        "export_host_rows"
+      ]
+    },
+    {
+      "id": "particle-both-forms",
+      "scope": "principle",
+      "statement": "A particle after a runtime substitution is resolved deterministically or refused.",
+      "checker": "symbol",
+      "module": "hanpatch.josa",
+      "symbols": [
+        "auto",
+        "resolve"
+      ]
+    },
+    {
+      "id": "cases-dq7-particles",
+      "scope": "case",
+      "statement": "DQ7 particle-guess counts.",
+      "checker": "human",
+      "source": "references/cases.md#particles-welded-to-a-runtime-substitution",
+      "reason": "A historical measurement on a shipped corpus. Nothing in the current tree can re-derive it; it is checked by whoever repeats the measurement."
+    },
+    {
+      "id": "cases-dq7-repair-cycle",
+      "scope": "case",
+      "statement": "DQ7 QA repair cycle counts.",
+      "checker": "human",
+      "source": "references/cases.md#the-qa-repair-cycle",
+      "reason": "Measured on one closed cycle of a specific corpus. Re-deriving it requires that corpus and that panel."
+    },
+    {
+      "id": "3ds-layeredfs",
+      "scope": "3ds",
+      "statement": "LayeredFS pack contents, size and the two traps.",
+      "checker": "human",
+      "source": "references/3ds.md#layeredfs-packs",
+      "reason": "Platform behaviour verified against a console and a specific title; not reproducible from source alone."
+    },
+    {
+      "id": "3ds-binary-delta",
+      "scope": "3ds",
+      "statement": "Binary deltas approach the size of the whole image on this container.",
+      "checker": "human",
+      "source": "references/3ds.md#binary-deltas-do-not-work-on-this-container",
+      "reason": "A measurement against a specific encrypted image."
+    },
+    {
+      "id": "expected-write-in-place-only",
+      "scope": "principle",
+      "statement": "A v1 write plan describes writes in place; a length change is refused rather than checked.",
+      "checker": "symbol",
+      "module": "hanpatch.expected_write",
+      "symbols": [
+        "LENGTH_CHANGED"
+      ]
+    }
+  ]
+}

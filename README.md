@@ -53,6 +53,61 @@ hanpatch build && hanpatch verify
 편의 장치일 뿐이고 권위는 갓 수행한 재검증에 있으므로, 매니페스트와 토큰을 함께 손봐도
 빌드는 실패한다.
 
+## 단계별 QA (신규 타이틀 옵트인)
+
+게이트 보고서는 게이트가 통과했다고 말한다. 그 통과가 릴리스의 어느 단계를 뒷받침하는지,
+무엇이 아직 증명되지 않았는지는 말하지 않는다. 초록색 게이트 실행을 "패치가 검증됐다"로
+읽는 것이 이 원장이 막으려는 오독이다.
+
+프로필에 `qa_upgrade`를 선언하면 8개 단계 토큰이 따로 기록된다.
+
+| 토큰 | 무엇이 증명하나 |
+|---|---|
+| `SOURCE_QA` | glossary·audit·qagate |
+| `STATIC_BINARY_QA` | capacity·materialize·manifest, 그리고 선언됐다면 바이트 소유권 |
+| `RC_BUILD` / `RC_READBACK_QA` | 빌드와 `pipeline.verify` + 어댑터 |
+| `RUNTIME_SMOKE` | 제출된 실행 증거 (없으면 `NOT_RUN`) |
+| `CANONICAL_PROMOTION` | 사람의 승격 결정 — 자동으로 채워지지 않는다 |
+| `PATCH_PACKAGE` / `RELEASE` | `release.create` / `channel.publish` |
+
+세 가지 규칙이 형태를 정한다.
+
+**기존 권위는 매핑이지 재구현이 아니다.** 대부분의 토큰은 이미 출하 중인 코드가 증명한다.
+그 행들은 `mapping_only`로 표시되고, 각 함수가 **판단을 내린 뒤** 원장에 보고한다. 원장은
+제2의 승인·패키징·배포 권위가 되지 않으며, 그럴 수 있는 동사를 노출하지 않음을 테스트가
+단언한다.
+
+**파이프라인 성공은 8개 통과가 아니다.** 게이트 하나가 토큰 하나를 움직인다. "실행이 끝났으니
+전부 초록" 경로는 의도적으로 없다. 정적 검사가 세울 수 없는 두 토큰 — 런타임 스모크와 정본
+승격 — 이 바로 그런 경로가 가장 탐나는 자리이기 때문이다. 정적 검사가 전부 통과해도 둘은
+`NOT_RUN`으로 남는다.
+
+**첫 실패가 이후 주장을 막는다.** 실패한 토큰은 이후 전부를 실패 토큰 이름과 함께
+`NOT_RUN`으로 되돌린다. `hanpatch build`와 `hanpatch verify`가 별개 명령이라 별도 프로세스가
+앞선 실패를 모른 채 통과를 기록할 수 있는데, 원장이 그것을 거부한다.
+
+원장은 `manifest.json`의 형제 파일이다. 안에 넣으면 `RULESET`이 올라가고 이미 출하된 봉인이
+전부 무효가 된다. 결과는 `hanpatch stages`로 읽는다 — 실행되지 않은 토큰의 사유까지 찍는다.
+
+선언이 없는 타이틀은 원장 코드가 한 줄도 돌지 않고 사이드카도 생기지 않는다. 기존 3타이틀은
+프로필을 한 바이트도 바꾸지 않았다.
+
+## 신규 타이틀이 선언하는 것
+
+전부 옵트인이고, 아무것도 선언하지 않으면 기존 동작 그대로다. 다섯 개가 있고 서로를
+요구하지 않는다.
+
+| 선언 | 위치 | 없을 때 |
+|---|---|---|
+| `qa_upgrade: {schema_version: 1}` | 프로필 | 원장·사이드카·호출 없음 |
+| `write_plan(rom, entries)` | 어댑터 메서드 | 바이트 소유권 미검사, 원장이 그 사실을 기록 |
+| `voice_contract` + `voice_authority` | 프로필 | 말투 게이트가 `NOT_DECLARED`로 통과 |
+| `runtime_evidence` | 프로필 (경로 또는 경로 목록) | `RUNTIME_SMOKE`가 `NOT_RUN` |
+| `source_lang` / `target_lang` | 프로필 | `hostrows`가 명령줄에서 축을 요구 |
+
+`qa_upgrade`만 나머지를 여는 조건이고, 나머지는 독립이다. 말투 계약 없이 바이트 소유권만
+쓰거나, 쓰기 계획 없이 실행 증거만 제출할 수 있다.
+
 ## 구조
 
 ```
@@ -133,6 +188,8 @@ hanpatch gates                       # 게이트 전부 실행 후 매니페스�
 
 hanpatch build --out dist/patched.cia
 hanpatch verify                      # 빌드된 ROM을 다시 읽어 검증
+hanpatch stages                      # 단계별 QA 원장 (옵트인 타이틀)
+hanpatch hostrows                    # 봉인된 텍스트를 말투 검수용 행으로 내보낸다
 hanpatch book --out build/scriptbook  # 대역 스크립트북 디렉터리 (검수용, 기본값 build/scriptbook)
 
 hanpatch feedback index               # 대본 전체를 검색 색인에 넣는다 (부분 일치)
@@ -180,7 +237,13 @@ dist/                       빌드된 ROM, 릴리스 번들
 - `verify(rom, entries)` → 빌드된 ROM을 다시 읽어 모든 항목이 살아남았음을 증명한다. 문제
   문자열 목록을 반환하며 비어 있으면 정상이다.
 
-선택 훅으로 `build_fonts()`와 `font_paths()`가 있다.
+선택 훅으로 `build_fonts()`, `font_paths()`, `write_plan(rom, entries)`가 있다.
+
+`write_plan`은 어댑터가 **자기가 쓸 바이트를 미리 선언**하는 훅이다. `verify`가 "선언한
+글자가 살아남았나"를 묻는다면, 이쪽은 "선언하지 않은 바이트를 건드리지 않았나"를 묻는다.
+둘은 겹치지 않는다 — 글자를 전부 정확히 넣고 예약 헤더 바이트 하나를 뭉갠 빌드는 `verify`가
+깨끗하다고 답한다. 반환값이 `None`이면 이 검사는 돌지 않고, **돌지 않았다는 사실이 원장에
+기록된다**.
 
 ## 훔쳐 갈 만한 아이디어
 
@@ -241,6 +304,25 @@ python3 tests/test_gates.py                                    # 로직만
 HANPATCH_PROJECT=/path/to/project python3 tests/test_gates.py  # + 코퍼스 케이스
 python3 tests/test_containers.py                               # 암호/컨테이너/델타
 ```
+
+단계별 QA 관련 스위트는 따로 있다.
+
+```
+python3 tests/test_stage_ledger.py            # 8단계 토큰과 실패 불변식
+python3 tests/test_expected_write.py          # 바이트 소유권 네 가지 거부
+python3 tests/test_runtime_evidence.py        # 증거 형식 강제, 내용 불간섭
+python3 tests/test_voice_gate.py              # 말투 게이트 옵트인
+python3 tests/test_interop.py                 # 언어 축 결속
+python3 tests/test_upgrade_fixtures.py        # 합성 픽스처 2계열
+python3 tests/test_upgrade_e2e.py             # ROM 없는 통합
+python3 tests/test_layering.py                # AST 계층 검사
+python3 tests/test_docs_claims.py             # 문서 주장이 실재 기호를 가리키는지
+```
+
+픽스처 두 계열(고정 레코드형·인덱스 아카이브형)은 **ROM 없이** 돌아간다. 골든 바이트열이
+테스트에 리터럴로 박혀 있어 writer와 parser가 같은 버그를 공유해도 서로 합의로 숨을 수 없다.
+변조 케이스마다 *어느 단계가* 잡는지까지 단언한다 — 예약 바이트 훼손은 바이트 소유권이 잡고
+stale CRC는 구조 파서가 잡는다. 엉뚱한 단계가 잡으면 잡아야 할 단계가 일을 안 하는 것이다.
 
 각 케이스는 과거에 실제로 통과해버린 적이 있는 구체적인 공격이다. 전각 라틴 문자 오염, 제어
 태그 순서 뒤바뀜, 제어 구간 밖으로 텍스트 이동, 용량 초과, 용어 이탈, 샤드 경쟁, 매니페스트

@@ -187,7 +187,28 @@ def publish(bundle, root, url_base=None, version=None, notes=None):
     doc = build_index(root, url_base)
     write_page(root, doc)
     rec['republished'] = existing
+    _record_release(rec)
     return rec
+
+
+def _record_release(rec):
+    """Report publication to the staged ledger, if one is active.
+
+    `publish` decides; the ledger only records what it decided.
+    """
+    try:
+        from hanpatch import stage_ledger
+        if not stage_ledger.enabled():
+            return
+        stage_ledger.record(
+            'RELEASE', stage_ledger.PASS,
+            evidence=rec.get('version'),
+            reason='channel.publish put version %s in the update channel'
+                   % rec.get('version'))
+    except Exception as err:  # pragma: no cover - defensive
+        from hanpatch import stage_ledger as _sl
+        kind = ('refused' if isinstance(err, _sl.LedgerError) else 'could not record')
+        print('stage ledger: %s RELEASE: %s' % (kind, err), flush=True)
 
 
 PAGE = """<!doctype html>
