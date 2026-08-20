@@ -258,6 +258,10 @@
  },
  "register_default": "plain",
  "source_lang": "ja",
+ "skip_keys": [
+  "off2410c4",
+  "off241110"
+ ],
  "source_only_pattern": null,
  "tag_pattern": "%[-+ #0]*[0-9]*(?:\\.[0-9]+)?[sdifSDIF]",
  "target_lang": "ko",
