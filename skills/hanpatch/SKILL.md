@@ -422,6 +422,44 @@ own copy, so two concurrent panels do not merge — the later writer discards th
 verdicts. Take an exclusive lock at startup, and flush before the atomic rename so a crash
 cannot lose verdicts the log already reported.
 
+### When repair stops converging
+
+A row whose field is intrinsically too small for any faithful wording cannot be repaired,
+only re-worded, and each rewrite draws a fresh preference from a different judge. Measured
+on a fixed-width label corpus: six full cycles moved the blocked count 447 -> 185 -> 38 ->
+39 -> 38 and then oscillated, because the remaining rows were compact technical identifiers
+with two or three syllables of room.
+
+The honest exit is a **waiver bound to the exact pair**, carrying a category and a reason an
+auditor can check per row, never a widened budget and never a relaxed floor. A waiver says
+"this wording is what the field can hold", so it must go stale the moment the value changes:
+re-check that no waiver is unused after every reseal, because a stale waiver is a claim about
+text that no longer ships.
+
+Two failure modes look identical in the log and are not. A pass reporting `ok=0 calls=0` per
+family is the selector finding nothing actionable — usually a staleness guard comparing
+against the sealed value while repairs land in the translation store. A pass reporting
+`ok=N calls=N` whose blocked count does not move is genuine non-convergence, and that is the
+one a waiver answers.
+
+### A slot another runtime owns is not yours to translate
+
+A binary can hand a string to a renderer you do not control — a firmware dialog, a system
+font, an OS toast. Retargeted glyph codes travel as the code of the cell they were baked
+into, so the game's own renderer draws the new script while the foreign renderer draws that
+code's *original* character. One correct-looking string on the same screen proves nothing
+about the rest: both classes live in the same binary and arrive in the same extraction pass.
+
+Identify the class by reverse-mapping the garbled output through the font map; if it returns
+a sentence shape in the target language, those codes are yours and the renderer is not. Then
+declare the owning slots as a **profile fact** — a per-title skip list keyed by slot — not as
+a deletion. The source string stays, untranslated, and the manifest reports it as
+deliberately skipped rather than missing. A keyword list over the dialog vocabulary tells you
+where to look, never which rows to exclude.
+
+The measured PSP case, including the two proven firmware slots and the glyph-table rows that
+cannot encode isolated letters at all, is in `references/runtime-ownership.md`.
+
 ## Choosing judge panel lanes
 
 Panel cost is *corpus x panel size*, not corpus. A per-token lane that looks cheap for one
