@@ -37,6 +37,8 @@ def _tag_only(t):
 def is_skip(s, key=None):
     t = s.strip()
     if key is not None:
+        if key.strip() in set(config.prof('skip_keys') or ()):
+            return True      # title-declared slots rendered by firmware or another owner
         if t == key.strip():
             return True      # placeholder rows whose text is just their own key
         if SKIP_KEY_RE.match(key.strip()):
