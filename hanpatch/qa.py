@@ -96,6 +96,15 @@ RETIRED_JUDGES = ['agy:gemini-3.6-flash']
 # Fallback order is a COST order: free rotators first, metered last. When all three Codex
 # accounts were momentarily parked, a paid-first list admitted `deepseek:deepseek-v4-pro`
 # for an entire run - about 4900k tokens of judging that the free lanes would have done.
+# A fourth ACCOUNT of gpt-5.6-luna, on the metered a6 endpoint. Registered so
+# its verdicts are accepted rather than discarded as an unknown judge - but it
+# is throughput, NOT independence: `judge_identity` folds it onto the same
+# `gpt-5.6-luna` the three codex accounts carry, and `disqualified` compares the
+# MODEL, so no luna lane may grade a luna-produced row no matter which account
+# it runs on. On this corpus luna produced 31.3% of the pairs, so every luna
+# account together can only reach the other 68.7%.
+LUNA_JUDGES = ['a6:gpt-5.6-luna']
+
 LEGACY_JUDGES = ['opencode:nemotron-3-ultra-free',
                  'nimproxy:deepseek-ai/deepseek-v4-pro',
                  'nimproxy:qwen/qwen3-next-80b-a3b-instruct',
@@ -115,6 +124,40 @@ LEGACY_JUDGES = ['opencode:nemotron-3-ultra-free',
                  'nimproxy:google/gemma-4-31b-it',
                  'opencode:mimo-v2.5-free',
                  'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
+                 # Two free OpenRouter lanes screened end to end on 2026-08-23 with the
+                 # production prompts (`tools/judge_screen.py`, `tools/judge_sensitivity.py`,
+                 # 12 pairs, seeds 17 and 29). Artefacts under /root/tmp/gemmaqa:
+                 # judge-screen-free-20260823-{a,b,c}.json,
+                 # judge-sens-free-20260823-{s17,s17b,s17c,s29a,s29b}.json.
+                 #
+                 #   model                        contract  recall s17/s29  FP s17/s29  tok/pair  lat
+                 #   stealth/ox-alpha             12/12     6/6  4/6        0/6  0/6    183-196   11-32s
+                 #   poolside/laguna-xs-2.1:free  12/12     5/6  4/6        0/6  1/6    196       5-12s
+                 #   poolside/laguna-s-2.1:free   12/12     4/6  1/6        2/6  0/6    181-208   6-10s   OUT
+                 #   cohere/north-mini-code:free  12/12     6/6  -          6/6  -      157       19s     OUT
+                 #   nvidia/nemotron-3.5-lightning:free 12/12 1/6 -         0/6  -      151       8s      OUT
+                 #   dots-studio/dots-3-note-preview:free 12/12 -  -        -    -      194       8s      OUT
+                 #
+                 # `north-mini-code` flagged all 6 CLEAN rows as defective - a judge that
+                 # always says defect satisfies REQUIRED_JUDGES while carrying no signal.
+                 # `nemotron-3.5-lightning` caught 1 of 6 planted defects, and
+                 # `laguna-s-2.1` fell from 4/6 to 1/6 between seeds: that instability is
+                 # exactly why `a6:minimax-m2.7` was removed on a single good reading.
+                 # `dots-3-note-preview` disagreed with the recorded panel on 4 of 12 rows
+                 # it had passed. `thinkingmachines/inkling:free` is unusable here at all
+                 # (403 "only available on agentic harnesses"), and `z-ai/glm-5.2:free`
+                 # answered 429 upstream on every attempt.
+                 #
+                 # ox-alpha is a stealth preview: an anonymous third party operates it and
+                 # RETAINS prompts (openrouter.ai/terms/stealth), so it judges the public
+                 # DQ7 corpus only - never anything under NDA. Reasoning is mandatory on
+                 # that endpoint (`{"enabled":false}` -> 400), so the lane must send
+                 # `reasoning={"effort":"low"}`, which measured 0 reasoning tokens.
+                 # Both lanes are free-tier: 20 RPM and 50 requests/day PER ACCOUNT
+                 # (openrouter.ai/docs/api-reference/limits), 3 accounts on this box, so
+                 # they are panel capacity, not a translation pool.
+                 'openrouter:stealth/ox-alpha',
+                 'openrouter:poolside/laguna-xs-2.1:free',
                  'deepseek:deepseek-v4-pro',
                  # Metered, and named here only so its verdicts are ACCEPTED - identity and
                  # runtime are separate lists, and a lane outside this set has its verdicts
@@ -214,11 +257,21 @@ def reserved(lane):
         return True
     return bool(model) and model.split('/')[-1].startswith('claude')
 
-# Runtime-only parking: this lane has 6,256 historical verdicts, so it remains in JUDGES.
-# It is not safe to feed it new work while the local rotator reports Worker local total
-# request limit 16/16 and intermittent 300-second timeouts (observed in the current pass).
-# Re-enable only after a bounded liveness probe is clean; identity and runtime are separate.
-PARKED_RUNTIME_LANES = ['nimproxy:meta/llama-3.3-70b-instruct']
+# `nimproxy:meta/llama-3.3-70b-instruct` was parked here for LIVENESS (the rotator was
+# reporting Worker local total request limit 16/16 with 300-second timeouts) and the entry
+# named its own release condition: a clean bounded probe. On 2026-08-19 that probe ran
+# against the real judge contract - 4/4 seeded defects caught, 0 false positives on the good
+# rows, every id present - so it is unparked. Its 1,650 recorded verdicts flag 2.0% below
+# floor, the most lenient of any lane with volume, which is a calibration fact rather than a
+# reason to refuse it.
+#
+# The nemotron lanes stay parked, and for a stronger reason than liveness: they fail the
+# judge CONTRACT. A lane that cannot address an id cannot be trusted to attach a verdict to
+# the right pair, which is worse than being unavailable - a misattached verdict silently
+# blocks the wrong row and passes another.
+PARKED_RUNTIME_LANES = ['nimproxy:nvidia/nemotron-3-super-120b-a12b',
+                        'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
+                        'opencode:nemotron-3-ultra-free']
 
 # Cheap QA tier: free rotators only. These three were live in the bounded probe just now and
 # are three distinct model identities. Paid DeepSeek, subscription Claude/Codex, and Agy are
@@ -227,9 +280,22 @@ PARKED_RUNTIME_LANES = ['nimproxy:meta/llama-3.3-70b-instruct']
 # because it cannot judge - `a6:qwen3.8-max` and `a6:minimax-m3` were measured against the
 # real judge contract on 2026-08-11 and both returned 12/12 verdicts, recall 6/6 and 4/6
 # on seeded defects at two seeds. They are METERED, so an operator names them explicitly.
-CHEAP_QA_JUDGES = ['nimproxy:nvidia/nemotron-3-super-120b-a12b',
-                   'opencode:mimo-v2.5-free',
-                   'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free']
+# `nemotron-3-super` and `nemotron-3-ultra-free` were REMOVED from this tier on
+# 2026-08-19 after a seeded-defect probe: a batch of 8 rows where the odd ids carried
+# obviously wrong Korean was sent to every lane. Four lanes returned 4/4 seeded defects
+# with exact id mapping and no false positives on the good rows
+# (`a6:qwen3.8-max`, `nimproxy:google/gemma-4-31b-it`, `a6:deepseek-v4-flash`,
+# `a6:gpt-5.6-luna`). `nemotron-3-super` returned PROSE instead of JSON, and
+# `nemotron-3-ultra-free` returned JSON with every id MISSING - 0/4 caught.
+#
+# This is what a broken cheap tier costs: with these two as the default pool, a QA run
+# reported `admitting cheap lane ...` and then produced ZERO verdicts across an hour while
+# every batch logged `unjudged`. Their recorded verdicts stay valid (identity is separate
+# from runtime) but only 19 of 4798 covered pairs depend on one to reach two models, so
+# nothing of substance rests on them.
+CHEAP_QA_JUDGES = ['nimproxy:google/gemma-4-31b-it',
+                   'nimproxy:meta/llama-3.3-70b-instruct',
+                   'opencode:mimo-v2.5-free']
 
 # Set by `--models`. Module-level because `active_judges()` is called from the panel
 # builder rather than threaded through it, and an env var alone would make a CLI flag
@@ -328,6 +394,22 @@ def lane_model(lane_id):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     name = re.sub(r'-\d{4,8}$', '', name)
+    # Groq's `compound` systems are an agentic WRAPPER, not a separate model, and the
+    # panel already holds what they wrap. Groq itself says so in its rate-limit
+    # accounting: a call to `groq/compound-mini` that exceeds the budget answers
+    # "Rate limit reached for model `openai/gpt-oss-120b`" (measured 2026-08-23 on all
+    # four org keys, both `compound` and `compound-mini`), and the 8K TPM it spends is
+    # gpt-oss-120b's, not a 70K allowance of its own.
+    #
+    # This matters because `compound-mini` screens WELL - 12/12 contract, 6/6 and 4/6
+    # seeded recall at seeds 17 and 29, 0 and 1 false positives, which is the same band
+    # as the admitted lanes. Left unfolded it would look like a strong independent judge
+    # and let a panel of `groq:openai/gpt-oss-120b` plus `groq-1:groq/compound-mini`
+    # satisfy REQUIRED_JUDGES with ONE model - the `-preview` bug again under a new
+    # spelling. Folding is the conservative direction: calling two lanes one judge only
+    # costs coverage, while calling one model two judges silently voids the requirement.
+    if name in ('compound', 'compound-mini'):
+        name = 'gpt-oss-120b'
     return name
 
 
@@ -335,7 +417,7 @@ def lane_model(lane_id):
 # is only sound because no verdict names them; a lane that had recorded one would have to stay
 # an accepted identity, or the gate would reject its own history as `unknown judge`.
 JUDGES = [s for s in (claude_judges() + GATEWAY_JUDGES + codex_judges()
-                      + LEGACY_JUDGES + RETIRED_JUDGES)
+                      + LUNA_JUDGES + LEGACY_JUDGES + RETIRED_JUDGES)
           if s not in REVOKED_GATEWAY_LANES]
 
 
@@ -542,7 +624,41 @@ def live_panel(required):
     pool = []
     have = set()
     explicit = bool(_POOL_OVERRIDE or os.environ.get('HANPATCH_QA_MODELS', '').strip())
-    for spec in active_judges():
+    specs = active_judges()
+    built = [(spec, providers.make(spec)) for spec in specs]
+
+    # Probing one lane after another turns a dead endpoint into a whole-panel
+    # delay: each lane gets two full timeouts before the next endpoint is even
+    # tried. Probe DIFFERENT endpoints concurrently, but keep lanes sharing one
+    # endpoint sequential so a6's four model ids do not manufacture a burst and
+    # falsely mark the endpoint dead on its own capacity guard. The result is
+    # still the same all-or-nothing `alive` decision per lane; only wall-clock
+    # scheduling changes.
+    groups = {}
+    for spec, prov in built:
+        endpoint = spec.split(':', 1)[0]
+        groups.setdefault(endpoint, []).append((spec, prov))
+
+    def probe_group(items):
+        result = {}
+        for spec, prov in items:
+            result[spec] = prov is not None and alive(prov)
+        return result
+
+    if explicit and os.environ.get('HANPATCH_QA_SKIP_LIVENESS') == '1':
+        # An operator-named pool has already been selected deliberately. The
+        # actual judge call still owns retry/rotation and will report a dead lane;
+        # do not spend two 300-second probes per lane before that first real call.
+        # The default remains fail-closed probing, so this cannot silently weaken
+        # an implicit panel.
+        live = {spec: prov is not None for spec, prov in built}
+    else:
+        live = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(groups))) as ex:
+            for result in ex.map(probe_group, groups.values()):
+                live.update(result)
+
+    for spec, p in built:
         # Stop once the panel is independent and has spare lanes for throughput. Any fallback
         # stays inside the free legacy set; paid/subscription lanes are never implicit.
         #
@@ -551,8 +667,7 @@ def live_panel(required):
         # on the floor. Measured: the default break admitted 6 of 17 named lanes.
         if not explicit and len(have) >= required and len(pool) >= 2 * required:
             break
-        p = providers.make(spec)
-        if p is None or not alive(p):
+        if p is None or not live.get(spec, False):
             continue
         pool.append(p)
         have.add(_ident(p.id))
@@ -578,6 +693,95 @@ def live_panel(required):
         pool.append(p)
         have.add(_ident(p.id))
     return pool
+
+
+def eligible(rows, lane_id, require_producer=False):
+    """The subset of `rows` this lane may judge.
+
+    `require_producer=True` refuses a row whose producer is unknown. An empty
+    producer disables the exclusion below, so a lane can pass its own translation and
+    the gate counts it as independent evidence - reachable whenever a provenance
+    shard is absent or unreadable, which `producers()` tolerates silently. The
+    default stays False so the serial path keeps admitting genuinely human-authored
+    rows; the streaming path opts in, because there every row it queues was just
+    produced by a lane it knows.
+
+    Two exclusions, both PER ROW: a model never judges its own translation, and a
+    judge never scores one pair twice. Dropping the whole batch when any single row
+    is ineligible starves a small pool - a mixed batch then excludes every lane and
+    the stragglers never reach the required panel size no matter how many passes run.
+
+    `rows` are the tuples `judge_batch` documents.
+    """
+    # `_ident` imports qagate lazily on purpose: qagate imports this module, so a
+    # module-level import here is a cycle.
+    ident = _ident(lane_id)
+    if require_producer:
+        return [r for r in rows
+                if r[4] and _ident(r[4]) != ident and ident not in r[5]]
+    return [r for r in rows
+            if (not r[4] or _ident(r[4]) != ident) and ident not in r[5]]
+
+
+#: Score range the judge contract admits, and the range `qagate` enforces. A reply
+#: of {"a": 99, "f": 99} used to be stored, counted as coverage and reported
+#: unflagged, and only the gate rejected it as out of range - after it was paid for.
+SCORE_MIN, SCORE_MAX = 1, 5
+
+
+def judge_batch(prov, rows, threshold, require_producer=False):
+    """Ask ONE lane to judge `rows`. Returns `{pair_key: verdict}`, possibly empty.
+
+    Extracted from `main` so the streaming orchestrator judges through exactly this
+    code rather than a copy of it. A second implementation of the judge contract is
+    the failure this avoids: the disposition whitelist, the producer exclusion and
+    the "never guess" rule below decide whether a verdict is admissible, and two
+    copies of that logic drift silently - the gate would keep accepting verdicts
+    while one path quietly stopped enforcing an exclusion.
+
+    `rows` are `(en, ko, jp, pair_key, producer_lane, already_judged_identities)`.
+    `ko` MUST be the post-normalisation value, i.e. what the manifest will seal:
+    a verdict is keyed by `pair_key(en, ko)` and one keyed to a pair that never
+    ships is invisible to the gate.
+    """
+    batch = eligible(rows, prov.id, require_producer=require_producer)
+    if not batch:
+        return {}
+    sub = glossary.relevant(glossary.load(), [r[0] for r in batch])
+    with providers.gate_for(prov.id):
+        raw = prov.chat(system_prompt(), prompt(batch, sub), temperature=0.0,
+                        max_tokens=judge_max_tokens(prov.id, len(batch)))
+    obj = translate.parse_json(raw)
+    if not isinstance(obj, dict):
+        return {}
+    out = {}
+    for k, (en, ko, _jp, pk, _pr, _have) in enumerate(batch):
+        v = obj.get(str(k))
+        if not isinstance(v, dict):
+            continue
+        try:
+            a = int(v.get('a', 0))
+            f = int(v.get('f', 0))
+        except (TypeError, ValueError):
+            continue
+        if not (SCORE_MIN <= a <= SCORE_MAX and SCORE_MIN <= f <= SCORE_MAX):
+            # Out of range is not a verdict. Storing it spends the row's coverage on
+            # evidence the gate will reject, so the row is left unjudged and retried.
+            continue
+        d = str(v.get('d', '')).strip().lower()
+        if d not in ('pass', 'defect', 'policy'):
+            # the structured contract is the whole point: never guess a
+            # disposition, leave the row unjudged so it is retried
+            continue
+        out[pk] = {'a': a, 'f': f, 'd': d,
+                   'r': str(v.get('r', ''))[:160],
+                   'judge': prov.id, 'en': en, 'ko': ko}
+    return out
+
+
+def flagged_verdict(rec, threshold):
+    """True when one verdict record is a finding rather than a pass."""
+    return rec['d'] != 'pass' or min(rec['a'], rec['f']) < threshold
 
 
 def main(argv=None):
@@ -697,41 +901,14 @@ def main(argv=None):
             # whole batch when any one row is ineligible starves a small pool, because a
             # mixed batch then excludes every lane and the stragglers never reach the
             # required panel size no matter how many passes run.
-            pident = qagate.judge_identity(prov.id)
-            batch = [r for r in pending
-                     if (not r[4] or qagate.judge_identity(r[4]) != pident)
-                     and pident not in r[5]]
+            batch = eligible(pending, prov.id)
             if not batch:
                 continue
             try:
-                sub = glossary.relevant(glossary.load(), [r[0] for r in batch])
-                with providers.gate_for(prov.id):
-                    raw = prov.chat(system_prompt(), prompt(batch, sub), temperature=0.0,
-                                     max_tokens=judge_max_tokens(prov.id, len(batch)))
+                out = judge_batch(prov, batch, args.threshold)
             except RuntimeError as e:
                 print(f'    ! {e}'[:160], flush=True)
                 continue
-            obj = translate.parse_json(raw)
-            if not isinstance(obj, dict):
-                continue
-            out = {}
-            for k, (en, ko, _jp, pk, _pr, _have) in enumerate(batch):
-                v = obj.get(str(k))
-                if not isinstance(v, dict):
-                    continue
-                try:
-                    a = int(v.get('a', 0))
-                    f = int(v.get('f', 0))
-                except (TypeError, ValueError):
-                    continue
-                d = str(v.get('d', '')).strip().lower()
-                if d not in ('pass', 'defect', 'policy'):
-                    # the structured contract is the whole point: never guess a
-                    # disposition, leave the row unjudged so it is retried
-                    continue
-                out[pk] = {'a': a, 'f': f, 'd': d,
-                           'r': str(v.get('r', ''))[:160],
-                           'judge': prov.id, 'en': en, 'ko': ko}
             if out:
                 # Keep the rows this lane was not allowed to judge: `batch` is now the
                 # eligible subset, so filtering it would silently drop them from the run.
@@ -744,8 +921,7 @@ def main(argv=None):
                         doc[k] = prev + [v]
                     counter[0] += len(out)
                     counter[1] += sum(1 for v in out.values()
-                                      if v['d'] != 'pass'
-                                      or min(v['a'], v['f']) < args.threshold)
+                                      if flagged_verdict(v, args.threshold))
                 save(doc, lock)
                 print(f'  [{counter[0]}/{len(rows)}] flagged={counter[1]} '
                       f'{time.time() - t0:.0f}s', flush=True)
@@ -761,8 +937,7 @@ def main(argv=None):
     save(doc, lock, force=True)
 
     flagged = {k: v for k, v in doc.items()
-               if any(r['d'] != 'pass' or min(r['a'], r['f']) < args.threshold
-                      for r in v)}
+               if any(flagged_verdict(r, args.threshold) for r in v)}
     json.dump(flagged, open(config.out('qa_flagged.json'), 'w'), ensure_ascii=False,
               indent=1, sort_keys=True)
     counts = {}
