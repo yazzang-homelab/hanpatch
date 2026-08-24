@@ -18,6 +18,20 @@ from hanpatch import config
 
 LAST_EXAMINED = 0
 
+# The complete per-problem failure lists from the most recent `main()`, published
+# for the same reason LAST_EXAMINED is: the printed report deliberately shows
+# only the first four rows of each problem so a human reading it is not buried,
+# and the return value is a 0/1 flag. Neither can drive a repair loop. A caller
+# that fixed the four printed rows of a 353-row problem would re-run the gate,
+# fail on the same problem, and never converge.
+#
+# Shape: {problem_name: ['family:key', 'family:key :: detail', ...]}, exactly the
+# strings the report renders. `register-mixed` is present here but is advisory -
+# it is excluded from the hard-failure count below, so fixing it alone never
+# turns this gate green.
+LAST_FAILS = {}
+ADVISORY = ('register-mixed',)
+
 
 TAG = re.compile(r'<[^>\n]*>')
 POLITE = re.compile(r'(니다|세요|십시오|습니까|나요)[.!?"\'”’)\]]*$')
@@ -35,7 +49,7 @@ def sentences(text):
 
 
 def main():
-    global LAST_EXAMINED
+    global LAST_EXAMINED, LAST_FAILS
     src = config.load_object(config.src_path(), 'the extracted source')
     # Audit what SHIPS. `inject` is handed the sealed manifest, so that is the artifact a
     # release claim is about. Reading the merged TM instead was measured wrong on DQ7
@@ -52,6 +66,16 @@ def main():
         # No seal yet: fall back to the TM so `audit` still works before the first
         # `manifest build`, and say so rather than silently checking something else.
         print('  note: no sealed manifest; auditing the translation memory instead')
+    # Row overrides are part of what ships: `manifest.build` resolves override ->
+    # TM, so an audit that reads only the seal and the TM reports a row the loop
+    # has already answered as untranslated. Measured here: 778 rows accepted by
+    # `loop submit` sat in `text_ko.json` while the coverage gate still counted
+    # 721 of them missing and failed the build for it.
+    override = {}
+    try:
+        override = config.load_object(manmod.OVERRIDE(), 'the manifest override')
+    except SystemExit:
+        pass
     tmdb = tm.load()
     gl = glossary.load()
     fails = defaultdict(list)
@@ -66,7 +90,9 @@ def main():
             if tm.is_skip(en, it['key']) or not en.strip():
                 continue
             stats['total'] += 1
-            ko = man_entries.get(f'{family}/{it["key"]}')
+            ko = (override.get(family) or {}).get(it['key'])
+            if ko is None:
+                ko = man_entries.get(f'{family}/{it["key"]}')
             if ko is None:
                 ko = tm.lookup(tmdb, en)
             if ko is None:
@@ -138,8 +164,30 @@ def main():
     # not be done: measured on DQ7 2026-08-11, 9 markup-only sources (`<BLANK>`, `<JA_HP>`,
     # `<JA_EQUIP>`, ...) were recorded before `skip_tag_only` existed, have no translation by
     # design, and so survived the has-a-translation filter forever.
+    #
+    # A source that is no longer a corpus ROW is the same defect one step further out: it
+    # cannot be translated, so it cannot be resolved, so the bar stays shut on work that no
+    # longer exists. Measured on CDX2 2026-08-19: correcting the executable's string scanner
+    # (it had been anchoring on the first Shift-JIS lead byte and so cut
+    # `記録メディアの空き容量が…` to begin mid-sentence at `新しく…`) removed 71 fragment
+    # sources from the corpus. Nine of them had already been recorded as failed candidates,
+    # and those nine held the release bar shut with every real row translated and validated.
+    live = {it['en'] for items in src.values() for it in items}
+    # A row answered by a row override is answered. This filter asked only the TM,
+    # so 16 stat and legend strings sat in the queue with a translation already
+    # written and validated - `ATK&DEF+10だがEXPなし` was rendered, accepted, and
+    # still counted as unresolved review, holding the release bar shut on work that
+    # was finished. Resolution order matches `manifest.build`: override, then seal,
+    # then TM.
+    answered = set()
+    for family, items in src.items():
+        table = override.get(family) or {}
+        for it in items:
+            if table.get(it['key']) or man_entries.get(f'{family}/{it["key"]}'):
+                answered.add(it['en'])
     pending = {k: v for k, v in pending.items()
-               if tm.lookup(tmdb, k) is None and not tm.is_skip(k)}
+               if tm.lookup(tmdb, k) is None and not tm.is_skip(k)
+               and k in live and k not in answered}
     print(f'=== review queue ===\n  unresolved: {len(pending)}')
     for k in list(pending)[:5]:
         print(f'      {k[:90]!r}')
@@ -188,6 +236,7 @@ def main():
           f'{len(incons)} inconsistent renderings, {len(collide)} name collisions')
     print(f'\nHARD FAILURES: {hard_fail}')
     LAST_EXAMINED = stats['total']
+    LAST_FAILS = {k: list(v) for k, v in fails.items()}
     return 1 if hard_fail else 0
 
 
@@ -281,6 +330,14 @@ def term_rendering(src, tmdb):
     gl = glossary.load()
     pairs = []
     if not gl:
+        # An empty glossary is normally a fail-closed error: otherwise a broken
+        # glossary build would report that it checked every term and found none.
+        # A title may explicitly declare that it has no fixed terminology table,
+        # but that declaration belongs in the profile rather than being inferred
+        # from an empty generated file. The default remains required.
+        if not config.prof('glossary_required', True):
+            print('  note: profile explicitly declares no fixed glossary terms')
+            return [], [], 0
         raise SystemExit('TERM REPORT REFUSED: the glossary is empty, so this would '
                          'examine nothing and report clean')
     for family, items in src.items():

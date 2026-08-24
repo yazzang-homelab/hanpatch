@@ -19,6 +19,7 @@ import sys
 import unicodedata
 
 
+from hanpatch import bytebudget
 from hanpatch import glossary
 from hanpatch import korean
 from hanpatch import register
@@ -39,6 +40,21 @@ LATIN_WORD_RE = re.compile(r'[A-Za-z]{2,}')
 LATIN_ALLOW_ALWAYS = {'HP', 'MP', 'AI', 'II', 'III', 'IV', 'V', 'TRPG', 'SD', 'WT',
                       'ATK', 'DEF', 'EXP', 'LV', 'OK'}
 LATIN_ALLOW = set(config.prof('latin_allow') or ()) | LATIN_ALLOW_ALWAYS
+# A source row made solely of declared ASCII asset/technical identifiers is not
+# prose. It is legitimate for its shipped rendering to contain no Hangul, but
+# only when every alphabetic run is explicitly allowed and no Japanese or
+# ordinary English remains. This keeps the general no-Hangul guard fail-closed.
+_ASCII_IDENTIFIER_SOURCE = re.compile(r'[A-Za-z0-9_./:+%~\-]+\Z')
+
+
+def allowed_ascii_identifier_source(text):
+    stripped = re.sub(TAG_RE, '', text or '').strip()
+    if not stripped or not _ASCII_IDENTIFIER_SOURCE.fullmatch(stripped):
+        return False
+    words = re.findall(r'[A-Za-z][A-Za-z0-9]*', stripped)
+    return bool(words) and all(word.upper() in LATIN_ALLOW for word in words)
+
+
 # tags that substitute a runtime value: Korean word order may move these.
 # Defined in wrap.py because line wrapping needs the same distinction (a
 # substitution tag renders glyphs, a control tag renders nothing).
@@ -141,11 +157,33 @@ def _tokens(s):
     return _WORD.findall(fold(TAG_RE.sub(' ', s)).lower())
 
 
+def _unavoidable_token(word):
+    """True for a token a correct translation MUST reproduce unchanged.
+
+    A bare digit run is one. So is an allowed technical token, and so is that
+    token fused to a digit run: the disc writes its stat notation as `HP100`,
+    `LV999`, `SP12`, `ATK999` - 57 such tokens corpus-wide - and splitting the
+    digits off is not optional, because the number IS the value the row states.
+
+    Getting this wrong is a rule no translation can satisfy rather than a missed
+    defect. `1/10\u30b2\u30fc\u30c8\u5fa9\u6d3b HP100%` can only be rendered with `1`, `10` and
+    `HP100` intact, so the copied-span check fired on every candidate and the
+    row could not be translated at all.
+    """
+    if word.isdigit():
+        return True
+    stem = word.rstrip('0123456789')
+    return bool(stem) and stem.upper() in LATIN_ALLOW
+
+
 def copied_spans(en, ko, ngram=3):
     """Source word n-grams reproduced verbatim in the translation.
 
     Punctuation, case and character width are normalised first, so inserting a
     colon, an em dash, a newline or a digit cannot hide a copied span.
+
+    An n-gram made entirely of tokens the translation cannot change is exempt;
+    see `_unavoidable_token`.
     """
     tokenizer = config.prof('copied_spans_tokenizer')
     if tokenizer != 'latin':
@@ -157,7 +195,7 @@ def copied_spans(en, ko, ngram=3):
     hits = []
     for i in range(len(et) - ngram + 1):
         g = tuple(et[i:i + ngram])
-        if g in kset and not all(w.isdigit() or w.upper() in LATIN_ALLOW for w in g):
+        if g in kset and not all(_unavoidable_token(w) for w in g):
             hits.append(' '.join(g))
     return hits
 
@@ -567,12 +605,18 @@ def _check_once(en, ko, gl, kind='default', group=None):
     problems += jprobs
     ko, wprobs = wrap.fits(en, ko, kind, group)
     problems += wprobs
+    # A field inside a fixed-stride record is bounded in BYTES, which the layout
+    # gate above cannot see: a two-syllable name sits well inside any text box
+    # while being two bytes too long for the column it is stored in.
+    problems += bytebudget.check(en, ko, kind)
     if not HANGUL_RE.search(re.sub(TAG_RE, '', ko)):
         stripped = re.sub(TAG_RE, '', en)
         # Japanese source text has no Latin run, so its no-Hangul guard requires
         # actual kana or kanji rather than treating tag-only and numeric rows as text.
         if ((source_lang() == 'ja' and (KANA_RE.search(stripped) or KANJI_RE.search(stripped)))
-                or re.search(r'[A-Za-z]{3,}', stripped)):
+                and not allowed_ascii_identifier_source(stripped)) or (
+                    re.search(r'[A-Za-z]{3,}', stripped)
+                    and not allowed_ascii_identifier_source(stripped)):
             problems.append('no hangul produced')
     problems += residual_script_problems(ko)
     # Tags and row breaks carry no source glyph, so they cannot hide a hard term
@@ -594,8 +638,9 @@ def _check_once(en, ko, gl, kind='default', group=None):
     # Latin survives only for the explicit acronym allowlist. Source
     # capitalisation is NOT a free pass: an English spell name left in the
     # Korean text contradicts its localised form elsewhere in the corpus.
-    leftovers = [w for w in LATIN_WORD_RE.findall(fold(re.sub(TAG_RE, '', ko)))
-                 if w.upper() not in LATIN_ALLOW]
+    leftovers = [] if allowed_ascii_identifier_source(en) else [
+        w for w in LATIN_WORD_RE.findall(fold(re.sub(TAG_RE, '', ko)))
+        if w.upper() not in LATIN_ALLOW]
     if leftovers:
         problems.append(f'untranslated latin: {sorted(set(leftovers))[:6]}')
     # isolated Latin letters fused into Hangul are corruption ("ｙ원로 ｏ이")
@@ -764,9 +809,81 @@ def build_prompt(items, gl_subset, kind, context):
     if regs:
         parts.append('[문자열별 화법 - 원문이 지정한 것이므로 반드시 지킨다]\n' +
                      '\n'.join(f'- {k}: {v}' for k, v in regs.items()))
+    # A field inside a fixed-stride record cannot grow, and the tightest ones on
+    # this title hold two syllables. Without this block the model learns the
+    # limit only by having the line REJECTED, which is the expensive way: the
+    # batch splits, retries, and repays the prompt each time. Stating the limit
+    # up front is the same information delivered before the call instead of
+    # after it. Only budgeted rows carry a line, so script families are
+    # unaffected and the cacheable prefix does not move for them.
+    limits = {}
+    for i, it in enumerate(items):
+        budget = bytebudget.of(kind, it['en'])
+        if budget is not None:
+            limits[str(i)] = budget
+    if limits:
+        parts.append(
+            '[글자수 상한 - 저장 공간이 고정된 항목이다. 넘으면 사용할 수 없다]\n' +
+            '\n'.join('- %s: 최대 %d바이트 (한글 %d자 이내)'
+                      % (k, b, b // 2) for k, b in limits.items()))
+
+    # The LINE limit, for the same reason the byte budget is stated: where the
+    # container owns layout, `wrap.fits` requires the translation to occupy
+    # exactly the source's line count with every line inside the box, and a
+    # translation that misses it is refused. Measured on this disc: 56 already-
+    # shipped rows failed that check, 39 of them script rows carrying no byte
+    # budget - so the model had no signal about the limit at all and could only
+    # miss it again on retranslation.
+    lines = {}
+    if (not wrap.composed(kind) and not wrap.width_advisory(kind)
+            and not wrap.family_engine_wraps(kind)
+            and wrap.title_lays_out_own_text() is False):
+        per_line = _line_hint(kind)
+        for i, it in enumerate(items):
+            if wrap.engine_lays_out(it['en']):
+                continue
+            lines[str(i)] = (it['en'].count('\n') + 1, per_line)
+    if lines:
+        head = ('[줄 구조 - 이 항목은 줄 수가 고정된 저장 공간이다]\n'
+                '줄바꿈(\\n) 개수를 원문과 똑같이 유지한다.')
+        if any(w for _n, w in lines.values()):
+            head += ' 각 줄은 아래 글자 수를 넘지 않게 쓴다.'
+        parts.append(head + '\n' + '\n'.join(
+            ('- %s: %d줄, 한 줄에 한글 %d자 이내' % (k, n, w)) if w
+            else ('- %s: %d줄' % (k, n))
+            for k, (n, w) in lines.items()))
     parts.append('[번역 대상] 아래 JSON의 각 값을 한국어로 번역해 같은 키로 반환:\n' +
                  json.dumps(payload, ensure_ascii=False, indent=1))
     return '\n\n'.join(parts)
+
+
+def _line_hint(kind):
+    """Roughly how many Hangul syllables fit one display line, or None.
+
+    A HINT for the prompt, never a gate. `wrap.budget_for` fails closed when the
+    title has declared no measured width, which is correct where it is enforced
+    and wrong here: a prompt is guidance, and refusing to build one because a
+    width is undeclared turns an advisory line into a hard dependency on a
+    measurement this function does not need. Measured cost of having it backwards:
+    `test_gates` aborted 11 cases early, because a fixture profile legitimately
+    declares no default width and prompt construction raised through them.
+
+    Returning None simply omits the per-line figure; the line COUNT is still
+    stated, and `wrap.fits` still enforces both.
+    """
+    try:
+        budget = wrap.budget_for(kind)
+    except SystemExit:
+        return None
+    if not budget:
+        return None
+    try:
+        cell = wrap.unit_width(wrap.units('가')[0])
+    except Exception:
+        return None
+    if not cell:
+        return None
+    return max(1, int(budget // cell))
 
 
 def _balanced_objects(text):
@@ -851,6 +968,14 @@ class Translator:
         self._seat = itertools.count()
         self.stats = {'ok': 0, 'failed': 0, 'calls': 0, 'retries': 0}
         self.last_provider = {}
+        #: {batch index: (candidate, [problem, ...])} for rows that never passed.
+        #: The review shard used to record only the string "validation failed", which
+        #: makes a blocked row undiagnosable without re-running the model - and a row
+        #: blocked by a wrong RULE looks exactly like a row blocked by a bad
+        #: translation. Measured cost of not having this: 69 rows sat unreachable
+        #: while `tag_pattern` was `(?!)` and `CRT` was not in `latin_allow`, and
+        #: finding that needed the model re-run by hand.
+        self.last_reject = {}
 
     def seat(self):
         """A starting endpoint for one batch, handed out round-robin.
@@ -955,9 +1080,16 @@ class Translator:
                     if not probs:
                         results[gi] = ko
                         self.last_provider[gi] = prov.id
+                        self.last_reject.pop(gi, None)
                         continue
+                    # Keep the rejected text and its reasons. A review shard that
+                    # records only "validation failed" cannot be acted on: the
+                    # candidate is gone, so the next operator has to re-run the
+                    # model to find out what the rule objected to.
+                    self.last_reject[gi] = (ko, list(probs))
                     fails.append(f'id {local}: ' + '; '.join(probs))
                 else:
+                    self.last_reject[gi] = ('', ['no candidate returned'])
                     fails.append(f'id {local}: 누락됨')
                 still.append(gi)
             if still and self.verbose:

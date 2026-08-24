@@ -160,6 +160,15 @@ class Provider:
             # `reasoning_effort=none` returned valid JSON in 77 completion tokens.
             # The reseller charges reasoning at its full $1/M output rate.
             payload['reasoning_effort'] = 'none'
+        if self.name == 'openrouter' and self.model == 'stealth/ox-alpha':
+            # This endpoint refuses to have reasoning turned off ({"enabled": false}
+            # answers HTTP 400 "Reasoning is mandatory for this endpoint"), and its
+            # DEFAULT effort is `max`: left alone it spends the completion budget
+            # thinking and can return an empty 200, the failure this class already
+            # guards against below. Measured 2026-08-23 on 12 judging pairs: effort
+            # `low` reported ZERO reasoning tokens and 12/12 usable verdicts at 196
+            # tokens per pair, so `low` is how this lane is asked to think.
+            payload['reasoning'] = {'effort': 'low'}
         headers = {'Content-Type': 'application/json',
                    'User-Agent': 'crimson-kr-mtl/1.0',
                    'Accept': 'application/json'}
@@ -297,6 +306,16 @@ ENDPOINTS = {
     # completed only 1/2 calls versus 2/2 at C=1, so this endpoint does NOT scale
     # safely with workers under the current token and supplier pool.
     'a6':         ('https://a6.a6api.com/v1', 'A6_API_KEY', 5),
+    # The WebGPT bridge: browser-driven ChatGPT web sessions behind an OpenAI Chat
+    # Completions facade (`webgpt-gjc-bridge.service`, loopback 8776). It is a
+    # SUBSCRIPTION lane, so it bills nothing per token - the constraint is seats, not
+    # spend. Measured on this box 2026-08-15: two `fulfil` workers at capacity 1 each,
+    # 14.5s round trip on a trivial prompt, and the bridge's own `fulfilMaxPerHour`
+    # of 240 is the real ceiling. `rpm` is set to 4 to sit under that cap rather than
+    # to describe the latency: `Provider._throttle` holds a lock and sleeps 60/rpm for
+    # the whole endpoint, so a higher number here would queue jobs the bridge then
+    # rejects. It reports zero usage tokens, so no cost can be derived from a response.
+    'webgpt':     ('http://127.0.0.1:8776/v1', None, 4),
 }
 
 
@@ -436,12 +455,14 @@ DEFAULT_MODELS = [
     'opencode:nemotron-3-ultra-free',
     'opencode:mimo-v2.5-free',
     'opencode:deepseek-v4-flash-free',
-    'groq:llama-3.3-70b-versatile',
     'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
 ]
 
 # Verified dead or unusable on 2026-07-31, kept as a record so they are not
 # reintroduced from memory:
+#   groq:llama-3.3-70b-versatile      HTTP 404 - decommissioned by Groq; it was
+#                                     still pinned and cost one wasted attempt
+#                                     per batch until it retired itself
 #   nimproxy:qwen/qwen3.5-397b-a17b   HTTP 410 Gone - model withdrawn
 #   nimproxy:moonshotai/kimi-k2.6     HTTP 404 - function id no longer routed
 #   nimproxy:z-ai/glm-5.2             no first byte in 90s
@@ -693,6 +714,16 @@ def codex_accounts():
 
 
 def make(spec, **kw):
+    """Build one lane, or None when its credential is absent.
+
+    `load_dotenv()` belongs HERE and not only in `build_pool`. The judge panel
+    builds its pool through `make` directly, so a lane whose key lives in the
+    dotenv rather than the process environment returned None and was dropped in
+    silence: a6 built fine for translation through `build_pool` and vanished
+    from every panel, which reads as "that lane is not a judge" rather than as
+    "nobody loaded the file".
+    """
+    load_dotenv()
     prov, model = spec.split(':', 1)
     if prov.startswith('claude'):
         acct = prov[len('claude'):] or 'default'
@@ -748,11 +779,19 @@ def _retry_after(headers, detail, default=20.0):
 # account, and the free rotators are rate-limited per minute rather than per connection,
 # so one in flight each is the honest setting - a second only produces a park response.
 CONCURRENCY = {
-    'nimproxy': 1,
-    'opencode': 1,
-    'openrouter': 1,
-    'tokenrouter': 1,
-    'groq': 1,
+    # These front N keys behind a local rotator, and the old flat 1 left most of
+    # that capacity idle. A rate limit is saturated by rpm * latency / 60
+    # requests in flight, which is the same arithmetic the Google lane below
+    # already uses; `Provider._throttle` still admits at the endpoint's rate, so
+    # extra slots fill the rate rather than exceed it. Measured on this box
+    # 2026-08-17: nimproxy 3 keys, opencode 4, openrouter 3 over 2 accounts,
+    # groq 4, tokenrouter 1. Defaults below assume a ~25s batch; override when
+    # the batch size changes, because latency is half of the product.
+    'nimproxy': int(os.environ.get('HANPATCH_NIMPROXY_CONCURRENCY', '12')),
+    'opencode': int(os.environ.get('HANPATCH_OPENCODE_CONCURRENCY', '8')),
+    'openrouter': int(os.environ.get('HANPATCH_OPENROUTER_CONCURRENCY', '5')),
+    'tokenrouter': int(os.environ.get('HANPATCH_TOKENROUTER_CONCURRENCY', '3')),
+    'groq': int(os.environ.get('HANPATCH_GROQ_CONCURRENCY', '10')),
     # Unlike the other free rotators, this ceiling is NOT fixed: quota is per Google
     # project, so N accounts means N independent 30 RPM / 14,400 RPD buckets and the
     # honest setting is one request in flight per account.
@@ -774,9 +813,13 @@ CONCURRENCY = {
     # No local rotator, no per-minute free cap - the ceiling is the account's own rate
     # limit, so this endpoint is the one that scales with concurrency.
     'deepseek': int(os.environ.get('HANPATCH_DEEPSEEK_CONCURRENCY', '10')),
-    # Live A6 DOE (2026-08-07): C=1 completed 2/2 calls; C=2 completed only 1/2.
-    # The failure was not a 429, so adding workers reduced both reliability and
-    # useful throughput. Keep one request in flight until a later DOE disproves it.
+    # Re-measured 2026-08-17 and the old reason is gone: C=1 2/2, C=2 4/4,
+    # C=3 6/6, no failures at any width, so the 2026-08-07 reliability finding
+    # no longer holds. The setting stays 1 for a different and better reason -
+    # THROUGHPUT FALLS as workers rise, because the endpoint serialises and the
+    # extra requests only queue: 8.6 calls/min at C=1, 6.0 at C=2 (70%), 5.6 at
+    # C=3 (66%), with per-call latency growing 7.0s -> 17.0s -> 26.4s. More
+    # volume from this lane comes from a bigger batch, not from more workers.
     'a6': int(os.environ.get('HANPATCH_A6_CONCURRENCY', '1')),
 }
 CODEX_CONCURRENCY = int(os.environ.get('HANPATCH_CODEX_CONCURRENCY', '6'))

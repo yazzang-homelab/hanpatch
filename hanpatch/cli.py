@@ -135,6 +135,32 @@ def cmd_gates(args):
     return 0
 
 
+def cmd_loop(args):
+    """Run one durable repair-loop operation and emit exactly one JSON object."""
+    from hanpatch import loop
+    if args.op == 'status':
+        result = loop.status()
+    elif args.op == 'next':
+        result = loop.next_batch(args.limit)
+    elif args.op == 'gate':
+        result = loop.gate()
+    elif args.op == 'submit':
+        if not args.batch:
+            raise SystemExit('--batch is required for `hanpatch loop submit`')
+        if not args.file:
+            raise SystemExit('--file is required for `hanpatch loop submit`')
+        fixes = config.load_object(args.file, 'the loop fixes')
+        bad = [key for key, value in fixes.items() if not isinstance(value, str)]
+        if bad:
+            raise SystemExit('the loop fixes must map keys to strings: '
+                             + ', '.join(sorted(bad)))
+        result = loop.submit(args.batch, fixes)
+    else:  # argparse choices make this unreachable; keep the function fail-closed.
+        raise SystemExit(f'unknown loop operation: {args.op}')
+    _p(json.dumps(result, ensure_ascii=False, separators=(',', ':')))
+    return 0
+
+
 def cmd_qa(args):
     from hanpatch import qa
     argv = []
@@ -552,6 +578,13 @@ def main(argv=None):
     s.add_argument('--quiet', action='store_true')
     s.set_defaults(fn=cmd_gates)
 
+    s = sub.add_parser('loop', help='durable row-oriented gate repair loop')
+    s.add_argument('op', choices=['status', 'next', 'submit', 'gate'])
+    s.add_argument('--limit', type=int, default=40)
+    s.add_argument('--batch')
+    s.add_argument('--file')
+    s.set_defaults(fn=cmd_loop)
+
     s = sub.add_parser('qa', help='top up the independent judge panel')
     s.add_argument('--workers', type=int)
     s.add_argument('--batch', type=int)
@@ -684,7 +717,9 @@ def main(argv=None):
     # AFTER the command, and never able to change its exit code: the ask is worth
     # a couple of seconds of a human's attention, not one byte of a build's
     # result. `star.nudge` swallows its own failures for the same reason.
-    star.nudge(argv=command)
+    # The loop contract reserves stdout for one machine-readable JSON object;
+    # the optional star prompt belongs on stderr for that command only.
+    star.nudge(argv=command, out=sys.stderr if 'loop' in command else None)
     return rc
 
 

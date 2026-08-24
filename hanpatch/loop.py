@@ -880,7 +880,11 @@ def submit(batch_id, fixes):
         # A stale or mistyped batch id must not cancel the real in-flight batch.
         # Its keys are still pending and the caller can retry with that id.
         state['batchId'] = state.get('batchId')
-        _record(state, 'submit', accepted=0, rejected=rejected,
+        # `rejected` is computed further down for the accepting path; on this
+        # one - a batch id that does not match the in-flight batch - it was read
+        # before it existed and the whole submit died with an UnboundLocalError,
+        # taking the caller's already-translated rows with it.
+        _record(state, 'submit', accepted=0, rejected=len(rejects),
                 stage=(state.get('lastGate') or {}).get('stage'))
         _save_state(state)
         return {

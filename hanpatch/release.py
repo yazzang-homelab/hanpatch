@@ -69,10 +69,19 @@ law where you live.
 """
 
 
-#: Profile keys whose values are PROJECT FILES the injector reads, not text. Both hold
-#: language-bearing artwork - DQ7 draws its title subtitle from a texture atlas and its
-#: home-menu banner from an ExeFS member - and neither was ever put in the bundle.
-PAYLOAD_KEYS = ('assets', 'exefs_replace')
+#: Profile keys whose values are PROJECT FILES the injector reads, not text. The
+#: first two hold language-bearing artwork - DQ7 draws its title subtitle from a
+#: texture atlas and its home-menu banner from an ExeFS member - and neither was
+#: ever put in the bundle.
+#:
+#: `build_inputs` is the same failure one step earlier: a file the injector needs
+#: in order to encode at all. Classic Dungeon X2 encodes Korean into retargeted
+#: Shift-JIS cells, so its injector reads `font_map.json`, the decrypted
+#: `EBOOT.elf` and the redrawn logo. None of them travelled, and `hanpatch apply`
+#: on the shipped CDX2 bundle died at `no .../work/font_map.json` - the bundle was
+#: the only artifact this project is allowed to distribute, and nobody could apply
+#: it.
+PAYLOAD_KEYS = ('assets', 'exefs_replace', 'build_inputs')
 
 
 def _declared_payload():
