@@ -34,9 +34,31 @@ def _tag_only(t):
     return bool(pattern) and not re.sub(pattern, '', t).strip()
 
 
+def source_of(it):
+    """The text that IS the source of record for one extracted row.
+
+    The single implementation of a rule that was written out three times - in
+    `qagate.source_of`, inside `manifest.build`, and nowhere at all in the
+    streaming review path, which hashed the raw English instead. That third
+    omission is the interesting one: a verdict is keyed on this value, so a path
+    that picks a different source for the same row produces evidence the gate
+    cannot find, and the failure surfaces as "no verdict" long after the call was
+    paid for.
+
+    English is the source unless it is a skip marker or blank, in which case the
+    Japanese row is what the engine actually ships and what must be judged.
+    """
+    en = it.get('en', '')
+    if is_skip(en, it.get('key')) or not en.strip():
+        return it.get('jp') or en
+    return en
+
+
 def is_skip(s, key=None):
     t = s.strip()
     if key is not None:
+        if key.strip() in set(config.prof('skip_keys') or ()):
+            return True      # title-declared slots rendered by firmware or another owner
         if t == key.strip():
             return True      # placeholder rows whose text is just their own key
         if SKIP_KEY_RE.match(key.strip()):

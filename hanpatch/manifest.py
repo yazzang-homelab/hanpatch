@@ -44,6 +44,45 @@ def digest(entries):
     return h.hexdigest()
 
 
+def override_table():
+    """The manifest override document, or {} when there is none."""
+    return (config.load_object(OVERRIDE(), 'the manifest override')
+            if os.path.exists(OVERRIDE()) else {})
+
+
+def candidate(fam, it, override=None, tmdb=None):
+    """What this row WILL seal as, and the source it is validated against.
+
+    Returns `(source_text, raw_ko)` before `translate.check`, or `(source, None)`
+    when nothing would be sealed. This exists so a caller that needs to know the
+    sealed value in advance - review, which keys its evidence on it - reads the
+    same precedence `build` applies instead of guessing:
+
+      * the source of record is `tm.source_of(it)`: Japanese for a skip/blank
+        English row, English otherwise
+      * an OVERRIDE beats the translation memory. A row translated and reviewed as
+        ko1 seals as ko2 when an override exists, and the verdict for ko1 is then
+        invisible to the gate - which is why review must consult this rather than
+        the translator's own output.
+    """
+    override = override_table() if override is None else override
+    if tmdb is None:
+        tmdb = tm.load()
+    en, key = it.get('en', ''), it['key']
+    source = tm.source_of(it)
+    ov = override.get(fam, {}).get(key)
+    if tm.is_skip(en, key) or not en.strip():
+        # Only an override ships such a row, and only when the Japanese proves the
+        # engine really uses the key.
+        if ov is None:
+            return source, None
+        jp = it.get('jp', '')
+        if not jp.strip() or tm.is_skip(jp, key):
+            return source, None
+        return jp, ov
+    return source, (ov if ov is not None else tm.lookup(tmdb, en))
+
+
 def build(src_path=None):
     global LAST_EXAMINED
     src_path = src_path or config.src_path()

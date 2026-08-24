@@ -68,10 +68,9 @@ def producers():
 
 
 def source_of(it):
-    en = it['en']
-    if tm.is_skip(en, it['key']) or not en.strip():
-        return it.get('jp') or en
-    return en
+    # One implementation, in `tm`, so the gate, the manifest and the streaming
+    # review path cannot disagree about which text a verdict is keyed on.
+    return tm.source_of(it)
 
 
 def record_problem(rec, en, ko):
