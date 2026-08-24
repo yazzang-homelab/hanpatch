@@ -20,7 +20,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from hanpatch.adapters.cdx2 import is_operand  # noqa: E402
+from hanpatch.adapters.cdx2 import (  # noqa: E402
+    BARE_OPERANDS, is_operand, is_script_operand,
+)
 
 #: A slice of the real DATA.DAT name list, including the three that shipped
 #: translated.
@@ -49,6 +51,10 @@ TEXT = (
 
 PASS, FAIL = [], []
 
+# The player-text samples are SYNTHETIC. This repository is public and the title's
+# script is not ours to publish; what the rule under test cares about is the SHAPE
+# (katakana word, kana with a wave dash, a kanji+kana sentence), not the sentence.
+
 
 def case(name, ok):
     (PASS if ok else FAIL).append(name)
@@ -58,6 +64,15 @@ def case(name, ok):
 print('a record naming an archive member is an operand')
 for text in sorted(ASSETS):
     case('operand %r' % text, is_operand(text, ASSETS))
+
+print('the appearance selector uses bare operands too')
+for text in sorted(BARE_OPERANDS):
+    case('bare operand %r' % text, is_script_operand(text, set()))
+for text in ('DICANM6091', 'dicanm6090', 'DICANM6090!', 'DICANM'):
+    case('near miss stays text %r' % text,
+         not is_script_operand(text, set()))
+case('ordinary archive membership still composes with the bare rule',
+     is_script_operand('OPENING.LDT', ASSETS))
 
 print('everything else is player text')
 for text in TEXT:
