@@ -26,6 +26,7 @@ and the loader allocates from it, so rewriting SCRIPT.SDT means recomputing that
 number. `pspfs.build` refuses to take a compressed file without one rather than
 carrying the stale value forward.
 """
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from hanpatch.platforms.psp import dsarc
 from hanpatch.platforms.psp import dsf
 from hanpatch.platforms.psp import eboot as ebootmod
 from hanpatch.platforms.psp import font as fontmod
+from hanpatch.platforms.psp import ldt
 from hanpatch.platforms.psp import iso9660
 from hanpatch.platforms.psp import mpb
 from hanpatch.platforms.psp import pspfs
@@ -48,6 +50,18 @@ SCRIPT = 'SCRIPT.SDT'
 DATABASE = 'DATABASE.DAT'
 PAIRS = (('SCRIPT.TBL', 'SCRIPT.DAT'), ('AISCRIPT.TBL', 'AISCRIPT.DAT'))
 FONT_ARCHIVES = ('FONT1.ARC', 'FONT2.ARC')
+OPENING = 'OPENING.LDT'
+OPENING_FAMILY = 'asset__OPENING.LDT'
+OPENING_MIN_LINES = 6
+
+#: Bare animation-dictionary keys consumed by the appearance selector. They are
+#: not PSPFS filenames, so the old archive-membership rule offered them for
+#: translation. The device reaches their lookup immediately after the appearance
+#: grid and then faults through an unmapped indirect target; a wrong glyph bitmap
+#: cannot alter that control-flow operand.
+BARE_OPERANDS = frozenset((
+    'DICANM6090', 'DICANM6330', 'DICANM6360', 'DICANM6390',
+))
 
 #: The title-screen logo. It is pixel art, not font-rendered text, so no amount
 #: of text translation touches it - it is replaced as an image or it ships
@@ -105,6 +119,11 @@ def is_operand(text, assets):
     return text in assets
 
 
+def is_script_operand(text, assets):
+    """Include measured non-file handles used by the appearance selector."""
+    return is_operand(text, assets) or text in BARE_OPERANDS
+
+
 #: Kana, kanji, or a Latin letter in either width. A source with none of those
 #: holds nothing a translator can act on: `④＋５、⑤－１` is an equipment effect
 #: written entirely in the game's own symbols, and `？？？` is a placeholder. They
@@ -121,6 +140,15 @@ LETTERS = re.compile(r'[\u3040-\u30ff\u4e00-\u9fffA-Za-z\uff21-\uff3a\uff41-\uff
 def is_translatable(text):
     """False when a source line holds no letters in any script."""
     return bool(LETTERS.search(text))
+
+
+def opening_rows(payload):
+    """Narration slots inside ``OPENING.LDT``, or fail closed."""
+    rows = ldt.strings(payload)
+    if len(rows) < OPENING_MIN_LINES:
+        raise ldt.LdtError('%s yielded %d text slots; expected at least %d'
+                           % (OPENING, len(rows), OPENING_MIN_LINES))
+    return rows
 
 #: Player-visible text compiled into the executable: the fourth title-menu item,
 #: the install and memory-stick messages, and the one-line help under most
@@ -176,7 +204,8 @@ def _sjis_ok(ch):
     return _encode_char(ch) is not None
 
 
-def load_font_map(work=None):
+def load_font_map_doc(work=None):
+    """The complete bake contract: code map plus expected cell bitmaps."""
     path = (os.path.join(work, FONT_MAP) if work
             else build_input(FONT_MAP) or config.work(FONT_MAP))
     if not os.path.isfile(path):
@@ -186,7 +215,11 @@ def load_font_map(work=None):
             'which renders as untranslated text rather than as an error'
             % path)
     with open(path) as fh:
-        doc = json.load(fh)
+        return json.load(fh)
+
+
+def load_font_map(work=None):
+    doc = load_font_map_doc(work)
     return {ch: int(code) for ch, code in doc['map'].items()}
 
 
@@ -277,6 +310,19 @@ class ClassicDungeonX2(adapter.Adapter):
         fh = open(rom, 'rb')
         buf = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
         return pspfs.Pspfs(buf[base:base + size]), buf, fh
+
+    @staticmethod
+    def _asset_payload(fs, name):
+        """Return ``(SDT wrapper or None, decoded payload)`` for one asset."""
+        entry = fs.find(name)
+        raw = fs.read(name)
+        if not entry.compressed:
+            return None, raw
+        box = sdt.Sdt(raw)
+        if len(box.payload) != entry.decompressed:
+            raise ldt.LdtError('%s declares %d decoded bytes but contains %d'
+                               % (name, entry.decompressed, len(box.payload)))
+        return box, box.payload
 
     def _scripts(self, blob):
         """{data member: Script} for every table/data pair in SCRIPT.SDT."""
@@ -374,6 +420,7 @@ class ClassicDungeonX2(adapter.Adapter):
                     sink.write(fs.read(entry.name))
             blob = fs.read(SCRIPT)
             assets = set(fs.names())
+            _opening_box, opening_payload = self._asset_payload(fs, OPENING)
         finally:
             buf.close()
             fh.close()
@@ -387,7 +434,7 @@ class ClassicDungeonX2(adapter.Adapter):
             for record in script.records():
                 chunk = script.chunks[record.chunk]
                 text = record.text.decode('shift_jis')
-                if is_operand(text, assets):
+                if is_script_operand(text, assets):
                     operands += 1
                     continue
                 if not is_translatable(text):
@@ -422,6 +469,18 @@ class ClassicDungeonX2(adapter.Adapter):
                 prior = seen.get(row.jp)
                 seen[row.jp] = (row.budget if prior is None
                                 else min(prior, row.budget))
+
+        # The script carries only the operand `OPENING.LDT`; the narration the
+        # player reads lives inside that asset and must be offered separately.
+        for row in opening_rows(opening_payload):
+            src.setdefault(OPENING_FAMILY, []).append({
+                'key': row.key, 'en': row.jp, 'jp': '',
+            })
+            seen = budgets.setdefault(OPENING_FAMILY, {})
+            prior = seen.get(row.jp)
+            seen[row.jp] = (row.budget if prior is None
+                            else min(prior, row.budget))
+
         # The executable's own prose is a third domain, and it belongs in the
         # corpus for the same reason the interface does: without it the fourth
         # title-menu item and the option help ship Japanese. It is keyed by file
@@ -464,7 +523,7 @@ class ClassicDungeonX2(adapter.Adapter):
             edits = {}
             for record in script.records():
                 chunk = script.chunks[record.chunk]
-                if is_operand(record.text.decode('shift_jis'), assets):
+                if is_script_operand(record.text.decode('shift_jis'), assets):
                     continue
                 key = '%s/%s' % (self._family_of(chunk),
                                  keys[(record.chunk, record.start)])
@@ -606,6 +665,26 @@ class ClassicDungeonX2(adapter.Adapter):
             sizes[DATABASE] = db_payload
             applied += db_applied
             missing += db_missing
+
+            opening_box, opening_payload = self._asset_payload(fs, OPENING)
+            opening_edits = {}
+            opening_missing = 0
+            for row in opening_rows(opening_payload):
+                text = entries.get('%s/%s' % (OPENING_FAMILY, row.key))
+                if not text:
+                    opening_missing += 1
+                    continue
+                opening_edits[row.key] = encode_line(text, hangul)
+            opening_payload, opening_applied = ldt.build(
+                opening_payload, opening_edits)
+            if opening_edits:
+                replace[OPENING] = (opening_box.build(opening_payload)
+                                    if opening_box else opening_payload)
+                if opening_box:
+                    sizes[OPENING] = len(opening_payload)
+            applied += opening_applied
+            missing += opening_missing
+
             # The built fonts are profile-declared output (`font_out`), and
             # `release.apply` rewrites those paths to the copies inside the
             # bundle. Reading them through the profile is what makes a bundle
@@ -643,9 +722,9 @@ class ClassicDungeonX2(adapter.Adapter):
             applied += eboot_applied
             missing += eboot_missing
         iso9660.write(rom, out, image)
-        print('inject: %d strings applied (%d interface, %d executable), '
-              '%d left as source, fonts %s'
-              % (applied, db_applied, eboot_applied, missing,
+        print('inject: %d strings applied (%d interface, %d opening, '
+              '%d executable), %d left as source, fonts %s'
+              % (applied, db_applied, opening_applied, eboot_applied, missing,
                  ', '.join(n for n in FONT_ARCHIVES if n in replace) or 'none'))
         return {
             'translated': applied,
@@ -658,12 +737,27 @@ class ClassicDungeonX2(adapter.Adapter):
 
     def verify(self, rom, entries):
         adapter.require(rom, 'built ROM')
-        hangul = load_font_map()
+        font_doc = load_font_map_doc()
+        hangul = {ch: int(code) for ch, code in font_doc['map'].items()}
+        expected_bitmaps = font_doc.get('bitmap_sha256')
         problems = []
+        if not isinstance(expected_bitmaps, dict):
+            problems.append('font_map.json has no bitmap readback; rebake fonts')
+            expected_bitmaps = {}
+        if hangul and not expected_bitmaps:
+            problems.append('font_map.json has an empty bitmap readback; '
+                            'rebake fonts')
         fs, buf, fh = self._archive(rom)
         try:
             blob = fs.read(SCRIPT)
             db = self._db_stored(fs.read(DATABASE), entries)
+            _opening_box, opening_payload = self._asset_payload(fs, OPENING)
+            opening_keys = []
+            for full_key in entries:
+                family, _, leaf = full_key.partition('/')
+                if family == OPENING_FAMILY and leaf:
+                    opening_keys.append(leaf)
+            opening = ldt.stored(opening_payload, opening_keys)
             fonts = {name: fontmod.Font(fs.read(name))
                      for name in FONT_ARCHIVES if name in fs.names()}
         finally:
@@ -682,6 +776,8 @@ class ClassicDungeonX2(adapter.Adapter):
         for family, rows in db.items():
             for key, raw in rows.items():
                 found['%s/%s' % (family, key)] = raw
+        for key, raw in opening.items():
+            found['%s/%s' % (OPENING_FAMILY, key)] = raw
         found.update(self._eboot_stored(rom))
         # A syllable with no cell cannot be encoded at all, so it must be
         # reported as a problem rather than raised: with the glyph authority at
@@ -723,6 +819,23 @@ class ClassicDungeonX2(adapter.Adapter):
                     problems.append('%s: no cell for %r' % (name, ch))
                 elif face.read(glyph) == blank:
                     problems.append('%s: cell for %r is blank' % (name, ch))
+        missing_hashes = sorted(set(hangul) - set(expected_bitmaps))
+        if expected_bitmaps and missing_hashes:
+            problems.append('%d mapped syllable(s) have no bitmap identity: %s'
+                            % (len(missing_hashes),
+                               ''.join(missing_hashes)[:40]))
+        for name, face in fonts.items():
+            by_code = {g.code: g for g in face.glyphs}
+            for ch, code in sorted(hangul.items()):
+                glyph = by_code.get(code)
+                if glyph is None:
+                    if ch not in needed:
+                        problems.append('%s: no cell for %r' % (name, ch))
+                    continue
+                wanted = expected_bitmaps.get(ch)
+                if wanted and hashlib.sha256(face.read(glyph)).hexdigest() != wanted:
+                    problems.append('%s: cell for %r does not match the bitmap '
+                                    'claimed by font_map.json' % (name, ch))
         print('verify: %d strings, %d syllables against %d fonts, %d problems'
               % (len(entries), len(needed), len(fonts), len(problems)))
         return problems

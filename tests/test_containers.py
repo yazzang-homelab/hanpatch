@@ -385,6 +385,7 @@ print('== container fidelity (M3) ==')
 # byte for byte. Each of them passed every check the pipeline had, and each would
 # have reached hardware.
 from hanpatch.platforms.threeds import romfs_build as rbuild  # noqa: E402
+from hanpatch.platforms.threeds import repack  # noqa: E402
 import hanpatch.platforms.threeds as threeds_mod  # noqa: E402
 import inspect  # noqa: E402
 
