@@ -26,6 +26,7 @@ tests/test_loop.py
 tests/test_loop_seal.py
 tests/test_layering.py
 tests/test_stage_ledger.py
+tests/test_josa_runtime_tokens.py
 "
 
 fail=0
