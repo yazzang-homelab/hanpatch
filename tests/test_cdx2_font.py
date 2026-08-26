@@ -178,6 +178,95 @@ def test_rasterise_is_one_bit():
     case('every rasterised cell has both ink and background', not solid)
 
 
+def test_map_readback():
+    """A map is valid only when every runtime font holds its claimed bitmap."""
+
+    class Face:
+        def __init__(self, glyphs, cells=None):
+            self.glyphs = glyphs
+            self.cells = cells or {}
+
+        def read(self, glyph):
+            return self.cells[glyph.code]
+
+    first = Face([
+        Cell('甲', 0x8840, 2),
+        Cell('乙', 0x8841, 2),
+        Cell('丙', 0x8842, 2),
+    ])
+    second = Face([
+        Cell('甲', 0x8840, 2),
+        Cell('丙', 0x8842, 2),
+        Cell('丁', 0x8843, 2),
+    ])
+    case('map uses only codes safe in both runtime fonts',
+         cf.common_retargetable_codes((first, second), set())
+         == [0x8840, 0x8842])
+
+    expected = {
+        '가': bytes([1]) * 256,
+        '나': bytes([2]) * 256,
+        '다': bytes([3]) * 256,
+    }
+    mapping = {'가': 0x8840, '나': 0x8841, '다': 0x8842}
+    glyphs = [
+        Cell('甲', 0x8840, 2),
+        Cell('乙', 0x8841, 2),
+        Cell('丙', 0x8842, 2),
+    ]
+    drifted = Face(glyphs, {
+        0x8840: expected['가'],
+        0x8841: expected['가'],
+        0x8842: expected['다'],
+    })
+    case('a rank-early cell is rejected while its neighbours remain valid',
+         cf.readback_mismatches(drifted, mapping, expected) == ['나'])
+
+    corrected = Face(glyphs, {
+        0x8840: expected['가'],
+        0x8841: expected['나'],
+        0x8842: expected['다'],
+    })
+    case('an exact map-to-bitmap assignment passes',
+         not cf.readback_mismatches(corrected, mapping, expected))
+
+
+def test_source_reference_ownership():
+    """Corpus ownership is per occurrence, and skipped rows still ship source."""
+    remaining = cf.uncovered_references(
+        ['決定', '決定', '情報'], ['決定'])
+    case('corpus ownership removes occurrences rather than whole members',
+         remaining == ['決定', '情報'])
+    used = set(''.join(remaining))
+    case('a still-referenced kanji cell is not retargetable',
+         not cf.retargetable(Cell('決', 0x8840, 2), used))
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        os.makedirs(os.path.join(work, 'ko'))
+        source = {
+            'eboot.elf': [
+                {'key': 'off248bd3', 'en': 'かな特', 'jp': ''},
+            ],
+            'db__ITEM.DAT': [
+                {'key': 'r0f0', 'en': '決定', 'jp': ''},
+            ],
+        }
+        with open(os.path.join(work, 'text_src.json'), 'w') as fh:
+            json.dump(source, fh, ensure_ascii=False)
+        case('database ownership mirrors extracted source occurrences',
+             cf.corpus_db_sources(work)
+             == {'ITEM.DAT': ['決定']})
+        with open(os.path.join(work, 'ko', 'tm_eboot.elf.json'), 'w') as fh:
+            json.dump({'かな特': '가'}, fh, ensure_ascii=False)
+        preserved, shipped, untranslated = cf.shipped_characters(
+            work, skip_keys={'off248bd3'})
+    case('a skipped palette row preserves source despite stale TM',
+         set('かな特') <= preserved and '가' not in preserved)
+    case('a skipped palette row is accounted as source',
+         shipped == 0 and untranslated == 1)
+
+
 def main():
     print('fullwidth rows')
     test_fullwidth_rows()
@@ -185,6 +274,10 @@ def main():
     test_proven_sheets()
     print('cell selection')
     test_retargetable()
+    print('map readback')
+    test_map_readback()
+    print('source ownership')
+    test_source_reference_ownership()
     print('ink')
     test_ink_index()
     test_advance()

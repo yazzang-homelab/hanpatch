@@ -35,6 +35,13 @@ import re
 _KANA = re.compile(
     r'[\u3040-\u309f\u30a0-\u30ff\u3005\u3006\u30fc]')
 
+#: Japanese text that may still reference a font cell. This is broader than
+#: `_KANA`: translation writes must reject kanji-only binary lookalikes, while
+#: this read-only preserve scan fails safe by keeping their cells. The 2026-08-24
+#: device build demonstrated the need with `決定`, `情報` and `装備替`.
+_JAPANESE = re.compile(
+    r'[\u3040-\u309f\u30a0-\u30ff\u3400-\u9fff\u3005\u3006\u30fc]')
+
 #: Shift-JIS lead bytes for the two-byte planes this disc's text uses.
 _LEAD = set(range(0x81, 0xA0)) | set(range(0xE0, 0xFD))
 
@@ -122,11 +129,22 @@ def strings(blob, min_len=MIN_LEN):
     """
     out = []
     for lo, hi in data_ranges(blob):
-        out += _strings_in(blob, lo, hi, min_len)
+        out += _strings_in(blob, lo, hi, min_len, _KANA)
     return out
 
 
-def _strings_in(blob, lo, hi, min_len):
+def reference_strings(blob, min_len=2):
+    """Japanese C strings whose glyphs an untouched slot may still render.
+
+    This is a read-only preserve surface, never an extraction/write authority.
+    """
+    out = []
+    for lo, hi in data_ranges(blob):
+        out += _strings_in(blob, lo, hi, min_len, _JAPANESE)
+    return out
+
+
+def _strings_in(blob, lo, hi, min_len, marker=_KANA):
     """Whole C-strings in [lo, hi), never a suffix of one.
 
     The cell boundary is the NUL, so a candidate must START where the previous
@@ -146,7 +164,7 @@ def _strings_in(blob, lo, hi, min_len):
         raw = bytes(blob[start:i])
         if len(raw) >= min_len:
             text = _decode(raw)
-            if text and _KANA.search(text):
+            if text and marker.search(text):
                 out.append((start, raw, text))
         i += 1
         start = i
