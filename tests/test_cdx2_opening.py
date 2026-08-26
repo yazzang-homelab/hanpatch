@@ -68,6 +68,11 @@ def test_extracts_the_asset_not_the_operand():
          all(row.budget == len(row.jp.encode('shift_jis')) for row in rows))
     case('ASCII handles and kanji-only cells are not writable narration',
          all(row.jp not in ('DICANM6090', '見本') for row in rows))
+    refs = [row.jp for row in ldt.reference_strings(payload())]
+    case('a kanji-only LDT cell still owns its font cells',
+         '見本' in refs)
+    case('writable narration remains a subset of referenced strings',
+         all(line in refs for line in PROLOGUE))
 
 
 def test_whole_cells_and_writeback():

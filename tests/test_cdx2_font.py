@@ -267,6 +267,57 @@ def test_source_reference_ownership():
          shipped == 0 and untranslated == 1)
 
 
+def test_opening_cell_ownership():
+    """Prologue leftovers keep their cells; eboot skip keys do not bind them."""
+    import tempfile
+    kana = 'いろいろな 記号が、'
+    blob = '見本'.encode('shift_jis') + b'\x00' + kana.encode('shift_jis') + b'\x00'
+    kana_off = len('見本'.encode('shift_jis')) + 1
+    with tempfile.TemporaryDirectory() as work:
+        os.makedirs(os.path.join(work, 'ko'))
+        source = {
+            'eboot.elf': [
+                {'key': 'off248bd3', 'en': 'かな特', 'jp': ''},
+            ],
+            'asset__OPENING.LDT': [
+                {'key': 'off%x' % kana_off, 'en': kana, 'jp': ''},
+            ],
+        }
+        with open(os.path.join(work, 'text_src.json'), 'w') as fh:
+            json.dump(source, fh, ensure_ascii=False)
+        with open(os.path.join(work, 'ko', 'tm_eboot.elf.json'), 'w') as fh:
+            json.dump({'かな特': '가'}, fh, ensure_ascii=False)
+        with open(os.path.join(work, 'ko', 'tm_asset__OPENING.LDT.json'), 'w') as fh:
+            json.dump({kana: '표식이다'}, fh, ensure_ascii=False)
+        colliding = {
+            'eboot.elf': [
+                {'key': 'off248bd3', 'en': 'かな特', 'jp': ''},
+            ],
+            'asset__OPENING.LDT': [
+                {'key': 'off248bd3', 'en': kana, 'jp': ''},
+            ],
+        }
+        with open(os.path.join(work, 'text_src.json'), 'w') as fh:
+            json.dump(colliding, fh, ensure_ascii=False)
+        preserved, shipped, untranslated = cf.shipped_characters(
+            work, skip_keys={'off248bd3'})
+        case('an opening slot is not held back by an eboot palette skip key',
+             set('표식이다') <= preserved and '가' not in preserved)
+        case('the skipped palette row still ships source while the prologue ships Korean',
+             shipped == 1 and untranslated == 1)
+
+        with open(os.path.join(work, 'text_src.json'), 'w') as fh:
+            json.dump(source, fh, ensure_ascii=False)
+        path = os.path.join(work, 'OPENING.LDT')
+        with open(path, 'wb') as fh:
+            fh.write(blob)
+        used, n_refs, n_live = cf.unowned_opening_characters(path, work)
+    case('a kanji-only leftover still owns its font cells',
+         set('見本') <= used)
+    case('extracted narration is not double-preserved as Japanese',
+         not (set(kana) <= used) and n_live == 1 and n_refs == 2)
+
+
 def main():
     print('fullwidth rows')
     test_fullwidth_rows()
@@ -278,6 +329,8 @@ def main():
     test_map_readback()
     print('source ownership')
     test_source_reference_ownership()
+    print('opening cell ownership')
+    test_opening_cell_ownership()
     print('ink')
     test_ink_index()
     test_advance()

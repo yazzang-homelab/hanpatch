@@ -40,12 +40,16 @@ from hanpatch.platforms.psp import dbtbl  # noqa: E402
 from hanpatch.platforms.psp import dsarc  # noqa: E402
 from hanpatch.platforms.psp import eboot as ebootmod  # noqa: E402
 from hanpatch.platforms.psp import font as fontmod  # noqa: E402
+from hanpatch.platforms.psp import ldt  # noqa: E402
 from hanpatch.platforms.psp import sdt  # noqa: E402
 
 FONT_ARCHIVES = ('FONT1.ARC', 'FONT2.ARC')
 DATABASE = 'DATABASE.DAT'
 EBOOT_INPUT = 'EBOOT.elf'
 EBOOT_FAMILY = 'eboot.elf'
+OPENING = 'OPENING.LDT'
+OPENING_FAMILY = 'asset__OPENING.LDT'
+DB_PREFIX = 'db__'
 HEADERS = (4, 8, 16)
 HANGUL_FIRST, HANGUL_LAST = 0xAC00, 0xD7A3
 
@@ -219,6 +223,21 @@ def uncovered_references(strings, owned):
     return out
 
 
+def row_skipped(family, key, skip_keys):
+    """True when this corpus row is a profile-declared skip slot.
+
+    Profile `skip_keys` are the eboot name-entry palette and firmware dialogs,
+    stored as leaf `off*` offsets. OPENING.LDT narration uses the same `off%x`
+    scheme, so a global leaf match would hold back a prologue slot that shares
+    an offset with a palette row. Leaf keys therefore bind only to `eboot.elf`;
+    a qualified `family/key` still skips that exact row.
+    """
+    skip_keys = set(skip_keys)
+    if '%s/%s' % (family, key) in skip_keys:
+        return True
+    return key in skip_keys and family == EBOOT_FAMILY
+
+
 def database_characters(path, skip=()):
     """Every character in a structurally located database field.
 
@@ -289,16 +308,24 @@ def shipped_characters(work, skip_keys=()):
         if os.path.isfile(tmpath):
             with open(tmpath) as fh:
                 tmap = json.load(fh)
+        # Database occurrence ownership is counted by corpus_db_sources /
+        # database_characters. Those rows still feed the preserve-set, but the
+        # shipped/source counters are the non-table text domains - script,
+        # executable, prologue - so a skipped eboot palette row is not mixed
+        # with an untranslated ITEM.DAT field in the same fixture.
+        count_rows = not family.startswith(DB_PREFIX)
         for row in rows:
             en = row['en']
             key = row.get('key', '')
-            ko = None if key in skip_keys else tmap.get(en)
+            ko = None if row_skipped(family, key, skip_keys) else tmap.get(en)
             if isinstance(ko, str) and ko:
                 used.update(ko)
-                shipped += 1
+                if count_rows:
+                    shipped += 1
             else:
                 used.update(en)
-                untranslated += 1
+                if count_rows:
+                    untranslated += 1
     return used, shipped, untranslated
 
 
@@ -348,6 +375,48 @@ def unowned_eboot_characters(path, work):
     owned = corpus_eboot_offsets(work)
     live = [(off, text) for off, _raw, text in refs if off not in owned]
     used = {ch for _off, text in live for ch in text}
+    return used, len(refs), len(live)
+
+
+def decode_extracted_asset(raw):
+    """SDT-wrapped archive member or a plain payload."""
+    try:
+        return sdt.Sdt(raw).payload
+    except sdt.SdtError:
+        return raw
+
+
+def corpus_opening_offsets(work):
+    """Prologue string offsets already represented in the source corpus."""
+    with open(os.path.join(work, 'text_src.json')) as fh:
+        src = json.load(fh)
+    out = set()
+    for row in src.get(OPENING_FAMILY, ()):
+        key = str(row.get('key', ''))
+        if not key.startswith('off'):
+            continue
+        try:
+            out.add(int(key[3:], 16))
+        except ValueError:
+            continue
+    return out
+
+
+def unowned_opening_characters(path, work):
+    """Characters referenced by OPENING.LDT slots the corpus cannot rewrite."""
+    with open(path, 'rb') as fh:
+        refs = ldt.reference_strings(decode_extracted_asset(fh.read()))
+    owned = corpus_opening_offsets(work)
+    live = []
+    for row in refs:
+        try:
+            off = int(row.key[3:], 16)
+        except ValueError:
+            live.append(row)
+            continue
+        if off not in owned:
+            live.append(row)
+    used = {ch for row in live for ch in row.jp}
     return used, len(refs), len(live)
 
 
@@ -431,6 +500,19 @@ def main(argv=None):
             eboot_path, args.work)
         used |= eboot_used
 
+    opening_path = os.path.join(args.extract, OPENING)
+    with open(os.path.join(args.work, 'text_src.json')) as fh:
+        has_opening_corpus = OPENING_FAMILY in json.load(fh)
+    if has_opening_corpus and not os.path.isfile(opening_path):
+        raise SystemExit(
+            'corpus carries %s but %s is missing; prologue leftovers cannot '
+            'be preserved without scanning the asset' % (OPENING_FAMILY, opening_path))
+    opening_used, opening_refs, opening_unowned = set(), 0, 0
+    if os.path.isfile(opening_path):
+        opening_used, opening_refs, opening_unowned = unowned_opening_characters(
+            opening_path, args.work)
+        used |= opening_used
+
     print('preserve-set from the shipped corpus: %d rows ship Korean, %d ship '
           'source, %d characters preserved (+%d database characters)'
           % (n_ko, n_src, len(used), len(db)))
@@ -440,6 +522,10 @@ def main(argv=None):
         print('executable references: %d Japanese C strings, %d outside the '
               'corpus, %d characters protected'
               % (eboot_refs, eboot_unowned, len(eboot_used)))
+    if os.path.isfile(opening_path):
+        print('opening references: %d Japanese C strings, %d outside the '
+              'corpus, %d characters protected'
+              % (opening_refs, opening_unowned, len(opening_used)))
 
     fonts = {}
     for name in FONT_ARCHIVES:

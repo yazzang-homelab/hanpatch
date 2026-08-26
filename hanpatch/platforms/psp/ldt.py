@@ -18,6 +18,12 @@ Entry = collections.namedtuple('Entry', 'key jp budget')
 
 _KANA = re.compile(r'[\u3040-\u309f\u30a0-\u30ff\u3005\u3006\u30fc]')
 
+#: Broader than `_KANA`. Translation writes must reject kanji-only binary
+#: lookalikes, while this read-only preserve scan fails safe by keeping their
+#: cells. The prologue payload holds `見本` next to the six narration lines.
+_JAPANESE = re.compile(
+    r'[\u3040-\u309f\u30a0-\u30ff\u3400-\u9fff\u3005\u3006\u30fc]')
+
 
 class LdtError(Exception):
     pass
@@ -44,16 +50,28 @@ def _cells(blob):
     # An unterminated tail is data, not a writable string slot.
 
 
-def strings(blob, min_len=4):
-    """Player-visible Japanese slots, keyed by stable payload offset."""
+def _collect(blob, min_len, marker):
     out = []
     for off, raw in _cells(blob):
         if len(raw) < min_len:
             continue
         text = _decode(raw)
-        if text and _KANA.search(text):
+        if text and marker.search(text):
             out.append(Entry('off%x' % off, text, len(raw)))
     return out
+
+
+def strings(blob, min_len=4):
+    """Player-visible Japanese slots, keyed by stable payload offset."""
+    return _collect(blob, min_len, _KANA)
+
+
+def reference_strings(blob, min_len=2):
+    """Japanese C strings whose glyphs an untouched slot may still render.
+
+    This is a read-only preserve surface, never an extraction/write authority.
+    """
+    return _collect(blob, min_len, _JAPANESE)
 
 
 def stored(blob, keys):
