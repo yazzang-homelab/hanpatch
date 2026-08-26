@@ -26,6 +26,7 @@ and the loader allocates from it, so rewriting SCRIPT.SDT means recomputing that
 number. `pspfs.build` refuses to take a compressed file without one rather than
 carrying the stale value forward.
 """
+import hashlib
 import json
 import os
 import re
@@ -176,7 +177,8 @@ def _sjis_ok(ch):
     return _encode_char(ch) is not None
 
 
-def load_font_map(work=None):
+def load_font_map_doc(work=None):
+    """The complete bake contract: code map plus expected cell bitmaps."""
     path = (os.path.join(work, FONT_MAP) if work
             else build_input(FONT_MAP) or config.work(FONT_MAP))
     if not os.path.isfile(path):
@@ -186,7 +188,11 @@ def load_font_map(work=None):
             'which renders as untranslated text rather than as an error'
             % path)
     with open(path) as fh:
-        doc = json.load(fh)
+        return json.load(fh)
+
+
+def load_font_map(work=None):
+    doc = load_font_map_doc(work)
     return {ch: int(code) for ch, code in doc['map'].items()}
 
 
@@ -658,8 +664,16 @@ class ClassicDungeonX2(adapter.Adapter):
 
     def verify(self, rom, entries):
         adapter.require(rom, 'built ROM')
-        hangul = load_font_map()
+        font_doc = load_font_map_doc()
+        hangul = {ch: int(code) for ch, code in font_doc['map'].items()}
+        expected_bitmaps = font_doc.get('bitmap_sha256')
         problems = []
+        if not isinstance(expected_bitmaps, dict):
+            problems.append('font_map.json has no bitmap readback; rebake fonts')
+            expected_bitmaps = {}
+        if hangul and not expected_bitmaps:
+            problems.append('font_map.json has an empty bitmap readback; '
+                            'rebake fonts')
         fs, buf, fh = self._archive(rom)
         try:
             blob = fs.read(SCRIPT)
@@ -723,6 +737,23 @@ class ClassicDungeonX2(adapter.Adapter):
                     problems.append('%s: no cell for %r' % (name, ch))
                 elif face.read(glyph) == blank:
                     problems.append('%s: cell for %r is blank' % (name, ch))
+        missing_hashes = sorted(set(hangul) - set(expected_bitmaps))
+        if expected_bitmaps and missing_hashes:
+            problems.append('%d mapped syllable(s) have no bitmap identity: %s'
+                            % (len(missing_hashes),
+                               ''.join(missing_hashes)[:40]))
+        for name, face in fonts.items():
+            by_code = {g.code: g for g in face.glyphs}
+            for ch, code in sorted(hangul.items()):
+                glyph = by_code.get(code)
+                if glyph is None:
+                    if ch not in needed:
+                        problems.append('%s: no cell for %r' % (name, ch))
+                    continue
+                wanted = expected_bitmaps.get(ch)
+                if wanted and hashlib.sha256(face.read(glyph)).hexdigest() != wanted:
+                    problems.append('%s: cell for %r does not match the bitmap '
+                                    'claimed by font_map.json' % (name, ch))
         print('verify: %d strings, %d syllables against %d fonts, %d problems'
               % (len(entries), len(needed), len(fonts), len(problems)))
         return problems
