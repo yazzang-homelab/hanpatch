@@ -162,8 +162,24 @@ def weld_after_tags(text):
 
 
 def _tag_alternation():
-    tags = sorted(config.prof('movable_tags') or (), key=len, reverse=True)
-    return '|'.join(re.escape(t) for t in tags) if tags else None
+    """Every token a row can carry whose VALUE is not known until run time.
+
+    `movable_tags` alone is not that set. It names the icon glyphs the injector
+    may relocate, and a title whose only substitutions are printf conversions
+    therefore had NO tags here at all - so `after_tags` compiled nothing, saw
+    nothing, and every particle written after a `%s` shipped as the translator
+    guessed it.
+
+    Measured on Classic Dungeon X2, 2026-08-26: 21 rows carried a single-form
+    particle straight after a placeholder and exactly ONE row carried a
+    both-forms rendering. `%s를 생성했습니다!` renders `글렌를` for a name the
+    PLAYER types, and the josa gate reported the corpus clean because `%s` was
+    not a tag it knew.
+    """
+    tags = set(config.prof('movable_tags') or ())
+    tags |= set(config.prof('runtime_tokens') or ())
+    return '|'.join(re.escape(t) for t in
+                    sorted(tags, key=len, reverse=True)) if tags else None
 
 
 def fix_after(text, terms):

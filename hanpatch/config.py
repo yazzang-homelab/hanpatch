@@ -40,7 +40,7 @@ _OBJECT_KEYS = (
     'gate_thresholds', 'substitution_values')
 _LIST_KEYS = ('models', 'name_keys', 'ui_only_families', 'ui_only_terms', 'hard_families',
               'hard_terms', 'kanji_allowlist', 'hard_break', 'page_break',
-              'movable_tags', 'control_tags', 'literal_delimiters', 'font_src', 'font_out')
+              'movable_tags', 'runtime_tokens', 'control_tags', 'literal_delimiters', 'font_src', 'font_out')
 # `skip_families`, `skip_key_patterns` and `skip_value_patterns` are deliberately
 # NOT validated: nothing reads them yet (`tm.is_skip` still carries the policy in
 # code), and schema-validating a key that does nothing promises the operator it
@@ -235,6 +235,12 @@ DEFAULT_PROFILE = {
     'hard_break': ['<br>'],
     'page_break': ['<page>'],
     'movable_tags': [],
+    # Tokens whose VALUE the engine substitutes at run time (printf conversions,
+    # engine placeholders). A particle written after one of these can only be
+    # correct in its both-forms shape, because the value is unknown until the
+    # row is drawn - see josa._tag_alternation for the 21 rows this omission
+    # shipped with a guessed particle.
+    'runtime_tokens': [],
     'control_tags': [],
     # Tokens the SOURCE carries that must not appear in the translation - reading aids and
     # other annotations meaningful only in the source language. Absent means the title has
