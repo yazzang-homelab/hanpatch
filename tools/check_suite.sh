@@ -15,6 +15,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 
 TESTS="
+tests/test_docs_claims.py
 tests/test_cdx2_font.py
 tests/test_cdx2_operand.py
 tests/test_font.py
