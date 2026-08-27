@@ -1,7 +1,10 @@
 """Tests for the `.DMD` container reader.
 
 Every case builds a container byte by byte, so the header relations and the
-fail-closed rules are proved without a disc. That matters here: a reader whose
+fail-closed rules are proved without a disc. Two of them are the ONLY coverage the
+multi-block path has: all 96 `.DMD` members on this disc declare exactly one
+block, so `blocks()`'s offset arithmetic and the straddling-record join are
+synthetic-only here and the module docstring records that. That matters here: a reader whose
 only evidence is a synthetic fixture can pass while returning nothing from the
 real asset, so the disc-side evidence for this module is recorded in `dmd.py` as
 a measurement (96 of 96 members decode, each to the length PSPFS records,

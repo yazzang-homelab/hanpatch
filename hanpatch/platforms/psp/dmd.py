@@ -15,8 +15,17 @@ bytes out and no reader would parse them. This module is that reader.
 That is byte for byte the header `sdt.py` documents. The difference is the block
 body: `SDT` holds IMY containers, `DMD` holds gzip members (`1f 8b`, deflate,
 FNAME set). The payload is the blocks' decoded contents concatenated in order -
-the split is transport, not structure, so a record can straddle a boundary and
-code that reads one block alone reads half a file. Decode everything, then parse.
+the split is transport, not structure - so decode everything, then parse.
+
+**That concatenation rule is carried from the SDT contract, not measured here.**
+Every one of the 96 `.DMD` members on this disc declares exactly ONE block, so
+`blocks()`'s multi-block path has never run against real data; it is covered by
+synthetic fixtures only, and the tests say so. If a multi-block member ever turns
+up, check two things before trusting the join: that a record really can straddle a
+boundary (true of SDT, assumed here), and that the inter-block gap is zero padded.
+The slice handed to gzip runs to the next offset, and Python's gzip tolerates
+trailing zeros but rejects trailing non-zero bytes - so non-zero alignment padding
+would surface as `does not inflate` rather than as a silent short read.
 
 Measured on `Classic Dungeon X2 (Japan) (v1.02)`, `/PSP_GAME/USRDIR/DATA.DAT`:
 all 96 `.DMD` members decode, and each decoded length equals the size PSPFS
