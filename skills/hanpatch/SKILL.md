@@ -650,9 +650,16 @@ than pretending to advise.
 
 ## Related
 
-Four companions, each owning something this pipeline deliberately does not. Read
-them when the work touches their axis; none of them is optional in the sense of
-"nice to have" — the code here has consumer boundaries built for two of them.
+**`krpatch` is the front door.** It owns no format code — only the order the five
+tracks run in and the acceptance criteria that stop a track being skipped. Start
+there when the job is "localise this ROM" rather than a specific stage, because
+the failure it exists to prevent is the one this pipeline cannot see on its own: a
+build at 99.98% coverage with every gate green that still drew Japanese on
+hardware, because three surfaces had never had their denominator counted.
+
+Four companions below, each owning something this pipeline deliberately does not.
+Read them when the work touches their axis; none of them is optional in the sense
+of "nice to have" — the code here has consumer boundaries built for two of them.
 
 **`hancharacter` — speech-style preservation.** Gate 7 above consumes a verdict
 this pipeline cannot produce. The handoff is concrete and runs in both directions:
