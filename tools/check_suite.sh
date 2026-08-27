@@ -21,6 +21,7 @@ tests/test_font.py
 tests/test_eboot.py
 tests/test_dsf.py
 tests/test_containers.py
+tests/test_ldtimg.py
 tests/test_runtime_evidence.py
 tests/test_loop.py
 tests/test_loop_seal.py
