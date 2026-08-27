@@ -74,10 +74,21 @@ minutes.
 | 4 | `audit` | untranslated rows, tag damage, register drift, duplicate meanings |
 | 5 | `manifest` | nothing — it *seals* every shippable string into one digest |
 | 6 | `qagate` | any entry lacking N independent judge passes for that exact pair |
+| 7 | `voice` | a sealed speech-style contract the shipped text no longer satisfies |
 
 Then the packer **re-runs the QA validation in-process** before writing a byte.
 The approval token is a convenience; the authority is the fresh revalidation.
 Editing the manifest and the token together still fails.
+
+Gate 7 runs **only for a title that opted into the staged ledger** — running it for
+a legacy title would let a malformed `voice_contract` hard-fail a build that never
+asked for the check. And it is a gate, not a report: `voice_gate.FAIL` raises and
+the build stops. What it does *not* do is judge voice. This repository owns
+provenance only — shape, which build the verdict describes, and the declared
+authority — because a second marker implementation here would drift from the one
+that already exists until the two disagree about the same line and nobody can say
+which is right. A title that declares no contract passes as `NOT_DECLARED`, and
+that word is stamped in the gate summary so silence is never read as clean.
 
 ## Staged QA state, for titles that opt in
 
@@ -199,7 +210,8 @@ written down.
 
 Collecting that evidence is the operator's job, by whatever means the platform
 allows. The pipeline stays emulator-free and has no dependency on any emulator
-tooling; where one is useful, the skill points at it and stops there.
+tooling; where one is useful, the skill points at it and stops there — see
+`emucap` under Related, including the platforms it does *not* cover.
 
 ## Ideas worth stealing even if you never run this
 
@@ -638,11 +650,50 @@ than pretending to advise.
 
 ## Related
 
-Text is not the only thing that needs translating. Logos, texture fonts, and
-baked-in graphics live in image assets and need a separate pipeline — if a
-`texture-logo-kr`-style skill is available, use it for those and this one for the
-script. They compose: this pipeline owns the message containers and fonts, that
-one owns the texture assets.
+**`krpatch` is the front door.** It owns no format code — only the order the five
+tracks run in and the acceptance criteria that stop a track being skipped. Start
+there when the job is "localise this ROM" rather than a specific stage, because
+the failure it exists to prevent is the one this pipeline cannot see on its own: a
+build at 99.98% coverage with every gate green that still drew Japanese on
+hardware, because three surfaces had never had their denominator counted.
+
+Four companions below, each owning something this pipeline deliberately does not.
+Read them when the work touches their axis; none of them is optional in the sense
+of "nice to have" — the code here has consumer boundaries built for two of them.
+
+**`hancharacter` — speech-style preservation.** Gate 7 above consumes a verdict
+this pipeline cannot produce. The handoff is concrete and runs in both directions:
+`hanpatch hostrows` exports the sealed text as host rows for a voice reviewer
+(`interop.export_host_rows`, with the language map **declared, never inferred** —
+guessing which language fills the evidence column yields a document that looks
+correct from both sides while the axes are transposed), and `hancharacter`'s
+manifest adapter can instead read the seal directly and re-derive the digest.
+`voice_gate.py` then checks provenance and nothing else. If a title declares a
+`voice_contract`, load that skill; without it there is no way to produce a passing
+verdict and the build will sit at `NOT_DECLARED` or fail.
+
+**`texture-logo-kr` — baked-in graphics.** Text is not the only thing that needs
+translating. Logos, texture fonts and baked-in art live in image assets and need a
+separate pipeline; use that skill for those and this one for the script. They
+compose: this pipeline owns the message containers and fonts, that one owns the
+texture assets.
+
+**`krpatch-publish` — distribution and feedback.** `hanpatch release` and
+`hanpatch publish` produce and post the bundle, but the site that serves it, its
+`data/games.json` registry, the independent apply round-trip check and the
+feedback triage live in that skill. Use it for anything past `--url-base`; this
+pipeline's job ends at a verified bundle.
+
+**`emucap` — runtime evidence collection.** The runtime section above says the
+evidence is the operator's job and that the skill points at a tool where one is
+useful. This is that pointer: `emucap` drives an emulator and reads its memory,
+which is what turns "the build boots" into a `runtime_evidence` document. Check
+the scope before planning around it — its adapters are `mgba`, `mednafen`,
+`mesen2`, `pcsx-redux`, `flycast` and `mame-pc98`, so **it does not cover PSP or
+3DS**, and the titles currently in `recipes/` and `profiles/` are on those two
+platforms. For them, collect evidence with the platform's own emulator and keep
+the pipeline emulator-free as documented. `status.methods` on a live connection is
+the authority on what that host can actually do — not a static guess from here.
 
 ## Where the code is
 
