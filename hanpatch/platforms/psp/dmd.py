@@ -6,6 +6,18 @@ could read one. Every `.DMD` member on the disc is compressed, so 96 members -
 1,201,348 bytes decoded - were unreachable: `extract` copied the compressed
 bytes out and no reader would parse them. This module is that reader.
 
+**`.DMD` names two different formats on this disc. This reads one of them.**
+The 96 members at the PSPFS top level are the gzip container documented below.
+Another 1,345 `.DMD` members live nested inside 72 `*_RM*.DAT` archives
+(`sdt` -> `dsarc`), and they are room tile-grid data: no gzip magic, and their
+first three u32s are `width`, `height`, `width * height` (1,340 of 1,345 satisfy
+that identity with dimensions inside 256). `parse_header` rejects every one of
+them, which is correct. Do NOT relax it to make them parse - they are a different
+format, not a broken instance of this one, and a reader that accepts both returns
+tile indices dressed as a payload. Measured 2026-08-27: no Shift-JIS Japanese
+sequence occurs in any of the 1,345 raw members (2,388,284 bytes), so they carry
+no player-visible text and localisation does not need them decoded.
+
     HEADER (little endian)
 
     0x00   4  block count
