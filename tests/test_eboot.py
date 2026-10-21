@@ -127,6 +127,18 @@ def test_requires_kana():
     case('a kanji-only run is not claimed as text', '設定' not in got)
 
 
+def test_reference_scan_keeps_kanji_only():
+    """Font preservation is broader than the executable write authority."""
+    payload = _sj('決定') + b'\x00' + _sj('せってい') + b'\x00'
+    blob = _elf([(payload, False)])
+    writable = [text for _off, _raw, text in eboot.strings(blob)]
+    references = [text for _off, _raw, text in eboot.reference_strings(blob)]
+    case('a kanji-only label is not claimed as writable text',
+         '決定' not in writable)
+    case('a kanji-only label still owns its font cells',
+         '決定' in references and 'せってい' in references)
+
+
 def test_budget_is_the_tightest_slot():
     """One translation serves every slot sharing a source.
 
@@ -224,6 +236,7 @@ def main():
     print('string boundaries')
     test_whole_cstrings_only()
     test_requires_kana()
+    test_reference_scan_keeps_kanji_only()
     print('budgets')
     test_budget_is_the_tightest_slot()
     print('writing')
