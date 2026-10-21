@@ -27,6 +27,7 @@ binary data yields 8994 distinct legal-looking codes against 2725 real glyphs,
 which would leave 3 reclaimable cells and no translation.
 """
 import argparse
+import hashlib
 import json
 import os
 import struct
@@ -34,12 +35,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from hanpatch import config  # noqa: E402
+from hanpatch.platforms.psp import dbtbl  # noqa: E402
 from hanpatch.platforms.psp import dsarc  # noqa: E402
+from hanpatch.platforms.psp import eboot as ebootmod  # noqa: E402
 from hanpatch.platforms.psp import font as fontmod  # noqa: E402
+from hanpatch.platforms.psp import ldt  # noqa: E402
 from hanpatch.platforms.psp import sdt  # noqa: E402
 
 FONT_ARCHIVES = ('FONT1.ARC', 'FONT2.ARC')
 DATABASE = 'DATABASE.DAT'
+EBOOT_INPUT = 'EBOOT.elf'
+EBOOT_FAMILY = 'eboot.elf'
+OPENING = 'OPENING.LDT'
+OPENING_FAMILY = 'asset__OPENING.LDT'
+DB_PREFIX = 'db__'
 HEADERS = (4, 8, 16)
 HANGUL_FIRST, HANGUL_LAST = 0xAC00, 0xD7A3
 
@@ -110,6 +120,34 @@ def retargetable(glyph, used):
     return fullwidth_kanji_code(glyph.code)
 
 
+def common_retargetable_codes(fonts, used):
+    """Codes whose cells are safe to repaint in every runtime font archive."""
+    pools = [
+        {g.code for g in face.glyphs if retargetable(g, used)}
+        for face in fonts
+    ]
+    return sorted(set.intersection(*pools)) if pools else []
+
+
+def bitmap_digest(values):
+    """Stable identity for the 16x16 coverage values a map entry claims."""
+    return hashlib.sha256(bytes(values)).hexdigest()
+
+
+def readback_mismatches(face, mapping, expected):
+    """Mapped syllables whose rebuilt cell is not their rasterised bitmap."""
+    by_code = {g.code: g for g in face.glyphs}
+    bad = []
+    for ch, code in mapping.items():
+        glyph = by_code.get(code)
+        if glyph is None or ch not in expected:
+            bad.append(ch)
+            continue
+        if bytes(face.read(glyph)) != bytes(expected[ch]):
+            bad.append(ch)
+    return bad
+
+
 #: The CLUT index that renders pure white, read off the device with solid
 #: single-index blocks (see `rasterise`). Every other index in the low range is a
 #: hue, so this is the only value a monochrome glyph may use.
@@ -171,41 +209,77 @@ def table_geometry(blob):
     return best
 
 
+def uncovered_references(strings, owned):
+    """Structural strings left after corpus-owned occurrences are removed."""
+    counts = {}
+    for text in owned:
+        counts[text] = counts.get(text, 0) + 1
+    out = []
+    for text in strings:
+        if counts.get(text, 0):
+            counts[text] -= 1
+        else:
+            out.append(text)
+    return out
+
+
+def row_skipped(family, key, skip_keys):
+    """True when this corpus row is a profile-declared skip slot.
+
+    Profile `skip_keys` are the eboot name-entry palette and firmware dialogs,
+    stored as leaf `off*` offsets. OPENING.LDT narration uses the same `off%x`
+    scheme, so a global leaf match would hold back a prologue slot that shares
+    an offset with a palette row. Leaf keys therefore bind only to `eboot.elf`;
+    a qualified `family/key` still skips that exact row.
+    """
+    skip_keys = set(skip_keys)
+    if '%s/%s' % (family, key) in skip_keys:
+        return True
+    return key in skip_keys and family == EBOOT_FAMILY
+
+
 def database_characters(path, skip=()):
     """Every character in a structurally located database field.
 
-    `skip` names members whose text the corpus already carries, so their shipped
-    form is accounted for elsewhere and their SOURCE must not be preserved -
-    that is the whole point of retargeting their cells. What remains is the
-    members the corpus does not cover, whose bytes the patch never rewrites and
-    which therefore still render exactly what they hold.
+    `skip` is preferably {member: [source occurrence, ...]}. Only those exact
+    occurrences are owned by the corpus and may surrender their source cells;
+    every other structural field still renders its original bytes. A legacy
+    iterable of member names remains accepted for callers that already proved
+    whole-member ownership, but the title build passes occurrence data because
+    one covered member can still contain held-back symbol or Japanese fields.
     """
     with open(path, 'rb') as fh:
         arc = dsarc.Dsarc(sdt.Sdt(fh.read()).payload)
     used = set()
+    covered = set(skip)
     solved, unsolved = [], []
     for member in arc:
-        if member.name in skip:
-            continue
         blob = arc.read(member.name)
+        owned = ([row.jp for row in dbtbl.strings(blob)]
+                 if member.name in covered else [])
+        if isinstance(skip, dict):
+            owned = list(skip.get(member.name, ()))
         geom = table_geometry(blob)
         if not geom:
             unsolved.append(member.name)
             continue
         head, stride, fields = geom
         count, = struct.unpack_from('<I', blob, 0)
+        references = []
         for i in range(count):
             record = blob[head + i * stride:head + (i + 1) * stride]
             for off in fields:
                 s = field_at(record, off)
                 if s:
-                    used.update(s)
+                    references.append(s)
+        for text in uncovered_references(references, owned):
+            used.update(text)
         solved.append(member.name)
     return used, solved, unsolved
 
 
 
-def shipped_characters(work):
+def shipped_characters(work, skip_keys=()):
     """Every character the PATCHED game renders, per family, from the corpus.
 
     The preserve-set decides which cells may be retargeted, and basing it on the
@@ -226,6 +300,7 @@ def shipped_characters(work):
     with open(path) as fh:
         src = json.load(fh)
     used = set()
+    skip_keys = set(skip_keys)
     shipped = untranslated = 0
     for family, rows in src.items():
         tmpath = os.path.join(work, 'ko', 'tm_%s.json' % family)
@@ -233,15 +308,24 @@ def shipped_characters(work):
         if os.path.isfile(tmpath):
             with open(tmpath) as fh:
                 tmap = json.load(fh)
+        # Database occurrence ownership is counted by corpus_db_sources /
+        # database_characters. Those rows still feed the preserve-set, but the
+        # shipped/source counters are the non-table text domains - script,
+        # executable, prologue - so a skipped eboot palette row is not mixed
+        # with an untranslated ITEM.DAT field in the same fixture.
+        count_rows = not family.startswith(DB_PREFIX)
         for row in rows:
             en = row['en']
-            ko = tmap.get(en)
+            key = row.get('key', '')
+            ko = None if row_skipped(family, key, skip_keys) else tmap.get(en)
             if isinstance(ko, str) and ko:
                 used.update(ko)
-                shipped += 1
+                if count_rows:
+                    shipped += 1
             else:
                 used.update(en)
-                untranslated += 1
+                if count_rows:
+                    untranslated += 1
     return used, shipped, untranslated
 
 
@@ -253,6 +337,102 @@ def corpus_db_members(work):
     with open(path) as fh:
         src = json.load(fh)
     return {f[len('db__'):] for f in src if f.startswith('db__')}
+
+
+def profile_input(name):
+    """Resolve one declared project input, failing if its promise is broken."""
+    declared = (config.prof('build_inputs') or {}).get(name)
+    if not declared:
+        return None
+    path = config.p(declared)
+    if not os.path.isfile(path):
+        raise SystemExit('profile declares %s at %s, but the file is missing; '
+                         'font cells cannot be reclaimed without scanning it'
+                         % (name, path))
+    return path
+
+
+def corpus_eboot_offsets(work):
+    """Executable string offsets already represented in the source corpus."""
+    with open(os.path.join(work, 'text_src.json')) as fh:
+        src = json.load(fh)
+    out = set()
+    for row in src.get(EBOOT_FAMILY, ()):
+        key = str(row.get('key', ''))
+        if not key.startswith('off'):
+            continue
+        try:
+            out.add(int(key[3:], 16))
+        except ValueError:
+            continue
+    return out
+
+
+def unowned_eboot_characters(path, work):
+    """Characters referenced by executable slots the corpus cannot rewrite."""
+    with open(path, 'rb') as fh:
+        refs = ebootmod.reference_strings(fh.read())
+    owned = corpus_eboot_offsets(work)
+    live = [(off, text) for off, _raw, text in refs if off not in owned]
+    used = {ch for _off, text in live for ch in text}
+    return used, len(refs), len(live)
+
+
+def decode_extracted_asset(raw):
+    """SDT-wrapped archive member or a plain payload."""
+    try:
+        return sdt.Sdt(raw).payload
+    except sdt.SdtError:
+        return raw
+
+
+def corpus_opening_offsets(work):
+    """Prologue string offsets already represented in the source corpus."""
+    with open(os.path.join(work, 'text_src.json')) as fh:
+        src = json.load(fh)
+    out = set()
+    for row in src.get(OPENING_FAMILY, ()):
+        key = str(row.get('key', ''))
+        if not key.startswith('off'):
+            continue
+        try:
+            out.add(int(key[3:], 16))
+        except ValueError:
+            continue
+    return out
+
+
+def unowned_opening_characters(path, work):
+    """Characters referenced by OPENING.LDT slots the corpus cannot rewrite."""
+    with open(path, 'rb') as fh:
+        refs = ldt.reference_strings(decode_extracted_asset(fh.read()))
+    owned = corpus_opening_offsets(work)
+    live = []
+    for row in refs:
+        try:
+            off = int(row.key[3:], 16)
+        except ValueError:
+            live.append(row)
+            continue
+        if off not in owned:
+            live.append(row)
+    used = {ch for row in live for ch in row.jp}
+    return used, len(refs), len(live)
+
+
+def corpus_db_sources(work):
+    """Source occurrences the database injector is allowed to replace."""
+    path = os.path.join(work, 'text_src.json')
+    with open(path) as fh:
+        src = json.load(fh)
+    out = {}
+    for family, rows in src.items():
+        if not family.startswith('db__'):
+            continue
+        out[family[len('db__'):]] = [
+            row['en'] for row in rows if row.get('en')
+        ]
+    return out
 
 
 def rasterise(ttf, px, cell, chars):
@@ -306,26 +486,55 @@ def main(argv=None):
     ap.add_argument('--limit', type=int, default=0)
     args = ap.parse_args(argv)
 
-    used, n_ko, n_src = shipped_characters(args.work)
-    covered = corpus_db_members(args.work)
+    skip_keys = config.prof('skip_keys') or ()
+    used, n_ko, n_src = shipped_characters(args.work, skip_keys=skip_keys)
+    covered = corpus_db_sources(args.work)
     db, solved, unsolved = database_characters(
         os.path.join(args.extract, DATABASE), skip=covered)
     used |= db
+
+    eboot_path = profile_input(EBOOT_INPUT)
+    eboot_used, eboot_refs, eboot_unowned = set(), 0, 0
+    if eboot_path:
+        eboot_used, eboot_refs, eboot_unowned = unowned_eboot_characters(
+            eboot_path, args.work)
+        used |= eboot_used
+
+    opening_path = os.path.join(args.extract, OPENING)
+    with open(os.path.join(args.work, 'text_src.json')) as fh:
+        has_opening_corpus = OPENING_FAMILY in json.load(fh)
+    if has_opening_corpus and not os.path.isfile(opening_path):
+        raise SystemExit(
+            'corpus carries %s but %s is missing; prologue leftovers cannot '
+            'be preserved without scanning the asset' % (OPENING_FAMILY, opening_path))
+    opening_used, opening_refs, opening_unowned = set(), 0, 0
+    if os.path.isfile(opening_path):
+        opening_used, opening_refs, opening_unowned = unowned_opening_characters(
+            opening_path, args.work)
+        used |= opening_used
+
     print('preserve-set from the shipped corpus: %d rows ship Korean, %d ship '
-          'source, %d characters preserved (+%d from %d uncovered database '
-          'members)'
-          % (n_ko, n_src, len(used), len(db - used) + len(db & used), len(unsolved)))
+          'source, %d characters preserved (+%d database characters)'
+          % (n_ko, n_src, len(used), len(db)))
     print('database members: %d solved, %d unsolved (%s)'
           % (len(solved), len(unsolved), ', '.join(unsolved[:6])))
+    if eboot_path:
+        print('executable references: %d Japanese C strings, %d outside the '
+              'corpus, %d characters protected'
+              % (eboot_refs, eboot_unowned, len(eboot_used)))
+    if os.path.isfile(opening_path):
+        print('opening references: %d Japanese C strings, %d outside the '
+              'corpus, %d characters protected'
+              % (opening_refs, opening_unowned, len(opening_used)))
 
     fonts = {}
     for name in FONT_ARCHIVES:
         with open(os.path.join(args.extract, name), 'rb') as fh:
             fonts[name] = fontmod.Font(fh.read())
     first = fonts[FONT_ARCHIVES[0]]
-    spare = [g for g in first.glyphs if retargetable(g, used)]
+    spare = common_retargetable_codes(fonts.values(), used)
     print('cells: %d total, %d filled, %d empty, %d retargetable in the kanji '
-          'area'
+          'area of every font'
           % (first.capacity, len(first.glyphs),
              first.capacity - len(first.glyphs), len(spare)))
 
@@ -355,10 +564,14 @@ def main(argv=None):
         raise SystemExit('%d syllables rendered blank from %s'
                          % (blank, args.ttf))
 
-    mapping = {}
+    mapping = {ch: code for ch, code in zip(charset, spare)}
     for name, f in fonts.items():
-        pool = [g for g in f.glyphs if retargetable(g, used)]
-        for ch, glyph in zip(charset, pool):
+        by_code = {g.code: g for g in f.glyphs}
+        for ch, code in mapping.items():
+            glyph = by_code.get(code)
+            if glyph is None or not retargetable(glyph, used):
+                raise SystemExit('%s cannot safely host %r at %#x'
+                                 % (name, ch, code))
             f.write(glyph, glyphs[ch])
             # A cell carries its own metrics, and the cell now holds a Hangul
             # syllable rather than the glyph it was baked for. Leaving the old
@@ -370,12 +583,16 @@ def main(argv=None):
             # missing its last letter.
             glyph.advance = ADVANCE_FULL
             glyph.bearing = 0
-            mapping.setdefault(ch, glyph.code)
         # The metrics are what the engine reads, so the check belongs on the
         # rebuilt font rather than on the objects just mutated.
         rebuilt = fontmod.Font(f.build())
         codes = {glyph.code for glyph in rebuilt.glyphs}
         by_code = {glyph.code: glyph for glyph in rebuilt.glyphs}
+        drift = readback_mismatches(rebuilt, mapping, glyphs)
+        if drift:
+            raise SystemExit(
+                '%d mapped cells in %s do not hold their claimed syllable (%s)'
+                % (len(drift), name, ''.join(drift[:8])))
         clipped = sorted(ch for ch, code in mapping.items()
                          if code in codes
                          and by_code[code].advance != ADVANCE_FULL)
@@ -431,6 +648,8 @@ def main(argv=None):
     with open(path, 'w') as fh:
         json.dump({'provisional': provisional, 'ttf': args.ttf, 'px': args.px,
                    'cells_retargeted': len(charset),
+                   'bitmap_sha256': {c: bitmap_digest(glyphs[c])
+                                     for c in charset},
                    'map': {c: mapping[c] for c in charset}},
                   fh, ensure_ascii=False, indent=1)
     print('wrote %s' % path)
